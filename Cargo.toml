@@ -1,0 +1,8 @@
+[package]
+name = "ml_connect_four"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn = "0.20"
+ratatui = "0.30"
