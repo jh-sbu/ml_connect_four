@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 burn = "0.20"
 ratatui = "0.30"
+crossterm = "0.28"
