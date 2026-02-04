@@ -54,7 +54,7 @@ fn render_board(frame: &mut Frame, board: &Board, selected_column: usize, area: 
     let mut lines = Vec::new();
 
     // Column numbers with selection indicator
-    let mut col_line = vec![Span::raw("  ")]; // Padding
+    let mut col_line = vec![Span::raw("   ")]; // Padding (3 chars to match "  ║")
     for col in 0..7 {
         if col == selected_column {
             col_line.push(Span::styled(
@@ -67,10 +67,11 @@ fn render_board(frame: &mut Frame, board: &Board, selected_column: usize, area: 
             col_line.push(Span::raw(format!(" {} ", col + 1)));
         }
     }
+    col_line.push(Span::raw("  ")); // Suffix padding to match " ║"
     lines.push(Line::from(col_line));
 
     // Top border
-    lines.push(Line::from("  ╔═══════════════════════╗"));
+    lines.push(Line::from("  ╔══════════════════════╗"));
 
     // Board rows
     for row in 0..6 {
@@ -91,10 +92,10 @@ fn render_board(frame: &mut Frame, board: &Board, selected_column: usize, area: 
     }
 
     // Bottom border
-    lines.push(Line::from("  ╚═══════════════════════╝"));
+    lines.push(Line::from("  ╚══════════════════════╝"));
 
     // Selection indicator
-    let mut indicator_line = vec![Span::raw("   ")]; // Align with board
+    let mut indicator_line = vec![Span::raw("   ")]; // Align with board (3 chars to match "  ║")
     for col in 0..7 {
         if col == selected_column {
             indicator_line.push(Span::styled(" ▲ ", Style::default().fg(Color::Cyan)));
@@ -102,6 +103,7 @@ fn render_board(frame: &mut Frame, board: &Board, selected_column: usize, area: 
             indicator_line.push(Span::raw("   "));
         }
     }
+    indicator_line.push(Span::raw("  ")); // Suffix padding to match " ║"
     lines.push(Line::from(indicator_line));
 
     let board_widget = Paragraph::new(lines).alignment(Alignment::Center);
