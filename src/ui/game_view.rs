@@ -12,24 +12,30 @@ pub fn render(
     game_state: &GameState,
     selected_column: usize,
     message: &Option<String>,
+    game_mode: &str,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(15),    // Board
-            Constraint::Length(3),  // Message
-            Constraint::Length(3),  // Controls
+            Constraint::Length(3), // Header
+            Constraint::Min(15),  // Board
+            Constraint::Length(3), // Message
+            Constraint::Length(3), // Controls
         ])
         .split(frame.area());
 
-    render_header(frame, game_state, chunks[0]);
+    render_header(frame, game_state, game_mode, chunks[0]);
     render_board(frame, game_state.board(), selected_column, chunks[1]);
     render_message(frame, message, chunks[2]);
     render_controls(frame, chunks[3]);
 }
 
-fn render_header(frame: &mut Frame, game_state: &GameState, area: ratatui::layout::Rect) {
+fn render_header(
+    frame: &mut Frame,
+    game_state: &GameState,
+    game_mode: &str,
+    area: ratatui::layout::Rect,
+) {
     let current_player = game_state.current_player();
     let (player_name, color) = match current_player {
         Player::Red => ("Red", Color::Red),
@@ -37,20 +43,29 @@ fn render_header(frame: &mut Frame, game_state: &GameState, area: ratatui::layou
     };
 
     let status = if game_state.is_terminal() {
-        "Game Over".to_string()
+        format!("Game Over  |  {}", game_mode)
     } else {
-        format!("Current Player: {}", player_name)
+        format!("Current Player: {}  |  {}", player_name, game_mode)
     };
 
     let header = Paragraph::new(status)
         .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title("Connect Four"));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Connect Four"),
+        );
 
     frame.render_widget(header, area);
 }
 
-fn render_board(frame: &mut Frame, board: &Board, selected_column: usize, area: ratatui::layout::Rect) {
+fn render_board(
+    frame: &mut Frame,
+    board: &Board,
+    selected_column: usize,
+    area: ratatui::layout::Rect,
+) {
     let mut lines = Vec::new();
 
     // Column numbers with selection indicator
@@ -98,7 +113,10 @@ fn render_board(frame: &mut Frame, board: &Board, selected_column: usize, area: 
     let mut indicator_line = vec![Span::raw("   ")]; // Align with board (3 chars to match "  ║")
     for col in 0..7 {
         if col == selected_column {
-            indicator_line.push(Span::styled(" ▲ ", Style::default().fg(Color::Cyan)));
+            indicator_line.push(Span::styled(
+                " ▲ ",
+                Style::default().fg(Color::Cyan),
+            ));
         } else {
             indicator_line.push(Span::raw("   "));
         }
@@ -121,9 +139,15 @@ fn render_message(frame: &mut Frame, message: &Option<String>, area: ratatui::la
 }
 
 fn render_controls(frame: &mut Frame, area: ratatui::layout::Rect) {
-    let controls = Paragraph::new("←/→: Move  |  Enter/Space: Drop  |  R: Restart  |  Q: Quit")
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title("Controls"));
+    let controls = Paragraph::new(
+        "←/→: Move  |  Enter/Space: Drop  |  R: Restart  |  A: Toggle AI  |  Q: Quit",
+    )
+    .alignment(Alignment::Center)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Controls"),
+    );
 
     frame.render_widget(controls, area);
 }
