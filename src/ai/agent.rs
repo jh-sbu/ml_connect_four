@@ -36,7 +36,7 @@ pub struct AgentMetrics {
 }
 
 /// Universal interface for all AI agents.
-pub trait Agent: Send + Sync {
+pub trait Agent {
     /// Select an action (column) given the current game state.
     /// When `training` is true, the agent may explore; otherwise it exploits.
     fn select_action(&mut self, state: &GameState, training: bool) -> usize;

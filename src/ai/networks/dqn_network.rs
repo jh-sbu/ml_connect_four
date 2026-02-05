@@ -54,9 +54,9 @@ impl<B: Backend> DqnNetwork<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::backend::NdArray;
+    use burn::backend::Wgpu;
 
-    type TestBackend = NdArray<f32>;
+    type TestBackend = Wgpu<f32, i32>;
 
     #[test]
     fn test_network_output_shape() {

@@ -71,9 +71,9 @@ fn find_landing_row(board: &Board, col: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::backend::NdArray;
+    use burn::backend::Wgpu;
 
-    type TestBackend = NdArray<f32>;
+    type TestBackend = Wgpu<f32, i32>;
 
     #[test]
     fn test_encode_initial_state_shape() {

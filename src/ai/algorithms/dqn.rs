@@ -1,5 +1,5 @@
 use burn::backend::Autodiff;
-use burn::backend::NdArray;
+use burn::backend::Wgpu;
 use burn::module::AutodiffModule;
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
@@ -14,7 +14,7 @@ use crate::ai::state_encoding::{encode_state, encode_states_batch};
 use crate::game::GameState;
 use crate::training::replay_buffer::ReplayBuffer;
 
-type InferBackend = NdArray<f32>;
+type InferBackend = Wgpu<f32, i32>;
 type TrainBackend = Autodiff<InferBackend>;
 
 /// DQN hyperparameters.
@@ -61,12 +61,6 @@ pub struct DqnAgent {
     rng: StdRng,
 }
 
-// SAFETY: DqnAgent is only used single-threaded in Milestone 3 training.
-// Burn's NdArray backend uses OnceCell internally which is !Sync, but we never
-// share DqnAgent across threads. The Agent trait requires Send+Sync for future
-// threading support.
-unsafe impl Send for DqnAgent {}
-unsafe impl Sync for DqnAgent {}
 
 impl DqnAgent {
     pub fn new(config: DqnConfig) -> Self {
