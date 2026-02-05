@@ -1,4 +1,5 @@
 use crate::ai::{Agent, RandomAgent};
+use crate::ai::algorithms::{DqnAgent, DqnConfig};
 use crate::game::{GameOutcome, GameState, MoveError, Player};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::{backend::Backend, Terminal};
@@ -160,6 +161,9 @@ impl App {
             KeyCode::Char('a') => {
                 self.toggle_ai();
             }
+            KeyCode::Char('d') => {
+                self.toggle_dqn();
+            }
             _ => {}
         }
     }
@@ -171,6 +175,28 @@ impl App {
         };
 
         // Reset game on toggle
+        self.game_state = GameState::initial();
+        self.selected_column = 3;
+        self.ai_move_pending = false;
+
+        let mode = self.game_mode_label();
+        self.message = Some(format!("Mode: {} — New game started!", mode));
+
+        if self.is_current_player_ai() {
+            self.ai_move_pending = true;
+        }
+    }
+
+    fn toggle_dqn(&mut self) {
+        self.yellow_player = match self.yellow_player {
+            PlayerKind::Human => {
+                let mut agent = DqnAgent::new(DqnConfig::default());
+                agent.set_epsilon(0.0); // greedy inference (untrained)
+                PlayerKind::Ai(Box::new(agent))
+            }
+            PlayerKind::Ai(_) => PlayerKind::Human,
+        };
+
         self.game_state = GameState::initial();
         self.selected_column = 3;
         self.ai_move_pending = false;

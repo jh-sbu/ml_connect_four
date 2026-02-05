@@ -140,7 +140,7 @@ fn render_message(frame: &mut Frame, message: &Option<String>, area: ratatui::la
 
 fn render_controls(frame: &mut Frame, area: ratatui::layout::Rect) {
     let controls = Paragraph::new(
-        "←/→: Move  |  Enter/Space: Drop  |  R: Restart  |  A: Toggle AI  |  Q: Quit",
+        "←/→: Move  |  Enter/Space: Drop  |  R: Restart  |  A: Random AI  |  D: DQN AI  |  Q: Quit",
     )
     .alignment(Alignment::Center)
     .block(
