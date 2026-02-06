@@ -1,5 +1,6 @@
-use crate::ai::{Agent, RandomAgent};
 use crate::ai::algorithms::{DqnAgent, DqnConfig};
+use crate::ai::{Agent, RandomAgent};
+use crate::checkpoint::{CheckpointManager, CheckpointManagerConfig};
 use crate::game::{GameOutcome, GameState, MoveError, Player};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::{backend::Backend, Terminal};
@@ -191,7 +192,19 @@ impl App {
         self.yellow_player = match self.yellow_player {
             PlayerKind::Human => {
                 let mut agent = DqnAgent::new(DqnConfig::default());
-                agent.set_epsilon(0.0); // greedy inference (untrained)
+                agent.set_epsilon(0.0);
+
+                let manager = CheckpointManager::new(CheckpointManagerConfig::default());
+                let load_msg = match manager.load_latest() {
+                    Ok(data) => {
+                        match agent.load_from_dir(&data.path) {
+                            Ok(()) => format!("DQN loaded (episode {})", data.metadata.episode),
+                            Err(_) => "DQN (failed to load checkpoint)".to_string(),
+                        }
+                    }
+                    Err(_) => "DQN (untrained, no checkpoint)".to_string(),
+                };
+                self.message = Some(load_msg);
                 PlayerKind::Ai(Box::new(agent))
             }
             PlayerKind::Ai(_) => PlayerKind::Human,
@@ -201,8 +214,10 @@ impl App {
         self.selected_column = 3;
         self.ai_move_pending = false;
 
-        let mode = self.game_mode_label();
-        self.message = Some(format!("Mode: {} — New game started!", mode));
+        if matches!(self.yellow_player, PlayerKind::Human) {
+            let mode = self.game_mode_label();
+            self.message = Some(format!("Mode: {} — New game started!", mode));
+        }
 
         if self.is_current_player_ai() {
             self.ai_move_pending = true;

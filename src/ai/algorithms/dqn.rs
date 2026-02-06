@@ -1,8 +1,12 @@
+use std::error::Error;
+use std::path::Path;
+
 use burn::backend::Autodiff;
 use burn::backend::Wgpu;
 use burn::module::AutodiffModule;
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
+use burn::record::DefaultRecorder;
 use burn::tensor::TensorData;
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -11,6 +15,7 @@ use rand::SeedableRng;
 use crate::ai::agent::{Agent, AgentMetrics, Experience, UpdateMetrics};
 use crate::ai::networks::{DqnNetwork, DqnNetworkConfig};
 use crate::ai::state_encoding::{encode_state, encode_states_batch};
+use crate::checkpoint::DqnTrainingState;
 use crate::game::GameState;
 use crate::training::replay_buffer::ReplayBuffer;
 
@@ -226,6 +231,72 @@ impl DqnAgent {
     /// Set epsilon directly (e.g. 0.0 for pure greedy inference).
     pub fn set_epsilon(&mut self, eps: f32) {
         self.epsilon = eps;
+    }
+
+    /// Save network weights to a directory.
+    pub fn save_to_dir(&self, dir: &Path) -> Result<(), Box<dyn Error>> {
+        let recorder = DefaultRecorder::default();
+        self.q_network
+            .clone()
+            .valid()
+            .save_file(dir.join("q_network"), &recorder)?;
+        self.target_network
+            .clone()
+            .save_file(dir.join("target_network"), &recorder)?;
+        Ok(())
+    }
+
+    /// Load network weights from a directory.
+    pub fn load_from_dir(&mut self, dir: &Path) -> Result<(), Box<dyn Error>> {
+        let recorder = DefaultRecorder::default();
+        let net_config = DqnNetworkConfig {};
+
+        let q: DqnNetwork<TrainBackend> = net_config
+            .init(&self.device)
+            .load_file(dir.join("q_network"), &recorder, &self.device)?;
+        self.q_network = q;
+
+        let target: DqnNetwork<InferBackend> = net_config
+            .init(&self.device)
+            .load_file(dir.join("target_network"), &recorder, &self.device)?;
+        self.target_network = target;
+        Ok(())
+    }
+
+    /// Export current training state for checkpointing.
+    pub fn training_state(&self) -> DqnTrainingState {
+        DqnTrainingState {
+            epsilon: self.epsilon,
+            step_count: self.step_count,
+            episode_count: self.episode_count,
+            learning_rate: self.config.learning_rate,
+            gamma: self.config.gamma,
+            epsilon_start: self.config.epsilon_start,
+            epsilon_end: self.config.epsilon_end,
+            epsilon_decay_episodes: self.config.epsilon_decay_episodes,
+            target_update_interval: self.config.target_update_interval,
+            batch_size: self.config.batch_size,
+            replay_capacity: self.config.replay_capacity,
+            min_replay_size: self.config.min_replay_size,
+        }
+    }
+
+    /// Restore training state from a checkpoint.
+    pub fn restore_training_state(&mut self, state: &DqnTrainingState) {
+        self.epsilon = state.epsilon;
+        self.step_count = state.step_count;
+        self.episode_count = state.episode_count;
+        self.config = DqnConfig {
+            learning_rate: state.learning_rate,
+            gamma: state.gamma,
+            epsilon_start: state.epsilon_start,
+            epsilon_end: state.epsilon_end,
+            epsilon_decay_episodes: state.epsilon_decay_episodes,
+            target_update_interval: state.target_update_interval,
+            batch_size: state.batch_size,
+            replay_capacity: state.replay_capacity,
+            min_replay_size: state.min_replay_size,
+        };
     }
 }
 

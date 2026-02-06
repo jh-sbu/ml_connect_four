@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use crate::ai::algorithms::DqnAgent;
 use crate::ai::{Agent, Experience, RandomAgent};
+use crate::checkpoint::{CheckpointManager, CheckpointManagerConfig, CheckpointMetrics};
 use crate::game::{GameOutcome, GameState, Player};
 use crate::training::metrics::{EpisodeResult, TrainingMetrics};
 
@@ -9,6 +12,8 @@ pub struct TrainerConfig {
     pub log_interval: usize,
     pub eval_interval: usize,
     pub eval_games: usize,
+    pub checkpoint_interval: usize,
+    pub checkpoint_dir: PathBuf,
 }
 
 impl Default for TrainerConfig {
@@ -18,6 +23,8 @@ impl Default for TrainerConfig {
             log_interval: 100,
             eval_interval: 500,
             eval_games: 100,
+            checkpoint_interval: 1000,
+            checkpoint_dir: PathBuf::from("checkpoints"),
         }
     }
 }
@@ -25,21 +32,35 @@ impl Default for TrainerConfig {
 /// Self-play trainer for DQN agents.
 pub struct Trainer {
     config: TrainerConfig,
+    checkpoint_manager: CheckpointManager,
 }
 
 impl Trainer {
     pub fn new(config: TrainerConfig) -> Self {
-        Trainer { config }
+        let checkpoint_manager = CheckpointManager::new(CheckpointManagerConfig {
+            checkpoint_dir: config.checkpoint_dir.clone(),
+            ..Default::default()
+        });
+        Trainer {
+            config,
+            checkpoint_manager,
+        }
     }
 
     /// Run the full training loop.
     pub fn train(&self, agent: &mut DqnAgent) {
         let mut metrics = TrainingMetrics::new();
 
-        println!("Starting DQN training for {} episodes...", self.config.num_episodes);
+        let start_episode = agent.episode_count() + 1;
+        let end_episode = agent.episode_count() + self.config.num_episodes;
+
+        println!(
+            "Starting DQN training for {} episodes (episodes {}..{})...",
+            self.config.num_episodes, start_episode, end_episode
+        );
         println!("-------------------------------------------");
 
-        for episode in 1..=self.config.num_episodes {
+        for episode in start_episode..=end_episode {
             let (experiences, result) = self.play_episode(agent);
             let update_metrics = agent.batch_update(&experiences);
 
@@ -53,7 +74,7 @@ impl Trainer {
                 println!(
                     "Episode {}/{} | eps: {:.3} | loss: {:.4} | win_rate({}): {:.1}% | draw: {:.1}% | avg_len: {:.1}",
                     episode,
-                    self.config.num_episodes,
+                    end_episode,
                     agent.epsilon(),
                     metrics.average_loss(window),
                     window,
@@ -70,6 +91,25 @@ impl Trainer {
                     self.config.eval_games,
                     eval_wr * 100.0
                 );
+            }
+
+            if episode % self.config.checkpoint_interval == 0 {
+                let eval_wr = self.evaluate(agent);
+                let window = self.config.log_interval;
+                let ckpt_metrics = CheckpointMetrics {
+                    win_rate: eval_wr,
+                    draw_rate: metrics.draw_rate(window),
+                    average_game_length: metrics.average_game_length(window),
+                    current_loss: metrics.average_loss(window),
+                    training_steps: agent.step_count(),
+                };
+                match self
+                    .checkpoint_manager
+                    .save_checkpoint(agent, &ckpt_metrics, episode)
+                {
+                    Ok(path) => println!("  >> Checkpoint saved: {}", path.display()),
+                    Err(e) => eprintln!("  >> Checkpoint failed: {}", e),
+                }
             }
         }
 
