@@ -39,7 +39,7 @@ fn render_header(frame: &mut Frame, dashboard: &DashboardState, area: Rect) {
     };
 
     let header_text = Line::from(vec![
-        Span::styled("Training: DQN", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("Training: {}", dashboard.algorithm), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         Span::raw("  |  "),
         Span::raw(format!(
             "Episode: {}/{}",
@@ -299,10 +299,23 @@ fn render_stats_panel(frame: &mut Frame, dashboard: &DashboardState, area: Rect)
             ),
         ]),
         Line::from(""),
-        Line::from(vec![
+    ];
+
+    if dashboard.algorithm == "PG" {
+        if let Some(entropy) = dashboard.policy_entropy {
+            lines.push(Line::from(vec![
+                Span::styled("Entropy:    ", Style::default().fg(Color::White)),
+                Span::raw(format!("{:.4}", entropy)),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(vec![
             Span::styled("Epsilon:    ", Style::default().fg(Color::White)),
             Span::raw(format!("{:.4}", dashboard.epsilon)),
-        ]),
+        ]));
+    }
+
+    lines.extend(vec![
         Line::from(vec![
             Span::styled("Loss:       ", Style::default().fg(Color::White)),
             Span::raw(format!("{:.6}", dashboard.loss)),
@@ -315,7 +328,7 @@ fn render_stats_panel(frame: &mut Frame, dashboard: &DashboardState, area: Rect)
             Span::styled("Avg Length:  ", Style::default().fg(Color::White)),
             Span::raw(format!("{:.1}", dashboard.avg_game_length)),
         ]),
-    ];
+    ]);
 
     if let Some(eval_wr) = dashboard.last_eval_win_rate {
         lines.push(Line::from(""));

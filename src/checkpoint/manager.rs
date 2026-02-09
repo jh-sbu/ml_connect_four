@@ -3,9 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ai::algorithms::DqnAgent;
+use crate::ai::algorithms::{DqnAgent, PolicyGradientAgent};
 use crate::checkpoint::metadata::{
     CheckpointHyperparameters, CheckpointMetadata, CheckpointMetrics, DqnTrainingState,
+    PgTrainingState,
 };
 
 /// Configuration for the checkpoint manager.
@@ -25,11 +26,18 @@ impl Default for CheckpointManagerConfig {
     }
 }
 
-/// Data returned when loading a checkpoint.
+/// Data returned when loading a DQN checkpoint.
 pub struct CheckpointData {
     pub path: PathBuf,
     pub metadata: CheckpointMetadata,
     pub training_state: DqnTrainingState,
+}
+
+/// Data returned when loading a PG checkpoint.
+pub struct PgCheckpointData {
+    pub path: PathBuf,
+    pub metadata: CheckpointMetadata,
+    pub training_state: PgTrainingState,
 }
 
 /// Manages saving, loading, listing, and pruning checkpoints.
@@ -137,6 +145,98 @@ impl CheckpointManager {
             resolved
         };
         self.load_checkpoint(&target)
+    }
+
+    /// Save a PG checkpoint: network weights, metadata, and training state.
+    pub fn save_pg_checkpoint(
+        &self,
+        agent: &PolicyGradientAgent,
+        metrics: &CheckpointMetrics,
+        episode: usize,
+    ) -> Result<PathBuf, Box<dyn Error>> {
+        let dir_name = format!("checkpoint_{:07}", episode);
+        let tmp_dir = self.config.checkpoint_dir.join(format!("{}.tmp", dir_name));
+        let final_dir = self.config.checkpoint_dir.join(&dir_name);
+
+        fs::create_dir_all(&tmp_dir)?;
+
+        // Save network weights
+        agent.save_to_dir(&tmp_dir)?;
+
+        // Save training state
+        let training_state = agent.training_state();
+        let ts_json = serde_json::to_string_pretty(&training_state)?;
+        fs::write(tmp_dir.join("training_state.json"), ts_json)?;
+
+        // Save metadata
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let metadata = CheckpointMetadata {
+            episode,
+            timestamp,
+            algorithm: "PG".to_string(),
+            metrics: metrics.clone(),
+            hyperparameters: CheckpointHyperparameters {
+                learning_rate: training_state.learning_rate,
+                gamma: training_state.gamma,
+                epsilon: 0.0,
+                batch_size: 0,
+                target_update_interval: 0,
+                replay_capacity: 0,
+                min_replay_size: 0,
+                epsilon_start: 0.0,
+                epsilon_end: 0.0,
+                epsilon_decay_episodes: 0,
+            },
+        };
+        let meta_json = serde_json::to_string_pretty(&metadata)?;
+        fs::write(tmp_dir.join("metadata.json"), meta_json)?;
+
+        // Atomic rename
+        if final_dir.exists() {
+            fs::remove_dir_all(&final_dir)?;
+        }
+        fs::rename(&tmp_dir, &final_dir)?;
+
+        self.update_latest_symlink(&dir_name)?;
+        self.prune_old_checkpoints()?;
+
+        Ok(final_dir)
+    }
+
+    /// Load PG checkpoint data from a specific directory.
+    pub fn load_pg_checkpoint(&self, dir: &Path) -> Result<PgCheckpointData, Box<dyn Error>> {
+        let meta_path = dir.join("metadata.json");
+        let ts_path = dir.join("training_state.json");
+
+        let meta_json = fs::read_to_string(&meta_path)?;
+        let metadata: CheckpointMetadata = serde_json::from_str(&meta_json)?;
+
+        let ts_json = fs::read_to_string(&ts_path)?;
+        let training_state: PgTrainingState = serde_json::from_str(&ts_json)?;
+
+        Ok(PgCheckpointData {
+            path: dir.to_path_buf(),
+            metadata,
+            training_state,
+        })
+    }
+
+    /// Load the latest PG checkpoint (via the `latest` symlink).
+    pub fn load_pg_latest(&self) -> Result<PgCheckpointData, Box<dyn Error>> {
+        let latest_link = self.config.checkpoint_dir.join("latest");
+        if !latest_link.exists() {
+            return Err("No 'latest' symlink found".into());
+        }
+        let resolved = fs::read_link(&latest_link)?;
+        let target = if resolved.is_relative() {
+            self.config.checkpoint_dir.join(resolved)
+        } else {
+            resolved
+        };
+        self.load_pg_checkpoint(&target)
     }
 
     /// List all checkpoints sorted by episode (ascending).
@@ -379,5 +479,35 @@ mod tests {
         assert!(episodes.contains(&2000)); // best win rate
         assert!(episodes.contains(&4000)); // second to last
         assert!(episodes.contains(&5000)); // last
+    }
+
+    #[test]
+    fn test_pg_checkpoint_roundtrip() {
+        use crate::ai::algorithms::{PgConfig, PolicyGradientAgent};
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = CheckpointManagerConfig {
+            checkpoint_dir: dir.path().to_path_buf(),
+            keep_last_n: 5,
+            keep_best_n: 3,
+        };
+        let manager = CheckpointManager::new(config);
+        let agent = PolicyGradientAgent::new(PgConfig::default());
+
+        let path = manager
+            .save_pg_checkpoint(&agent, &test_metrics(), 1000)
+            .unwrap();
+        assert!(path.exists());
+        assert!(path.join("metadata.json").exists());
+        assert!(path.join("training_state.json").exists());
+        assert!(path.join("policy_value_network.mpk").exists());
+
+        let data = manager.load_pg_checkpoint(&path).unwrap();
+        assert_eq!(data.metadata.episode, 1000);
+        assert_eq!(data.metadata.algorithm, "PG");
+
+        let mut new_agent = PolicyGradientAgent::new(PgConfig::default());
+        new_agent.load_from_dir(&data.path).unwrap();
+        new_agent.restore_training_state(&data.training_state);
     }
 }

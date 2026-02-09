@@ -51,3 +51,18 @@ pub struct DqnTrainingState {
     pub replay_capacity: usize,
     pub min_replay_size: usize,
 }
+
+/// PG-specific training state written to training_state.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PgTrainingState {
+    pub episode_count: usize,
+    pub step_count: usize,
+    pub learning_rate: f64,
+    pub gamma: f32,
+    pub gae_lambda: f32,
+    pub ppo_epsilon: f32,
+    pub entropy_coeff: f32,
+    pub value_coeff: f32,
+    pub ppo_epochs: usize,
+    pub max_grad_norm: f32,
+}

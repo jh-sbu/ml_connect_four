@@ -1,4 +1,4 @@
-use crate::ai::algorithms::{DqnAgent, DqnConfig};
+use crate::ai::algorithms::{DqnAgent, DqnConfig, PgConfig, PolicyGradientAgent};
 use crate::ai::{Agent, RandomAgent};
 use crate::checkpoint::{CheckpointManager, CheckpointManagerConfig};
 use crate::game::{GameOutcome, GameState, MoveError, Player};
@@ -165,6 +165,9 @@ impl App {
             KeyCode::Char('d') => {
                 self.toggle_dqn();
             }
+            KeyCode::Char('g') => {
+                self.toggle_pg();
+            }
             _ => {}
         }
     }
@@ -206,6 +209,48 @@ impl App {
                 };
                 self.message = Some(load_msg);
                 PlayerKind::Ai(Box::new(agent))
+            }
+            PlayerKind::Ai(_) => PlayerKind::Human,
+        };
+
+        self.game_state = GameState::initial();
+        self.selected_column = 3;
+        self.ai_move_pending = false;
+
+        if matches!(self.yellow_player, PlayerKind::Human) {
+            let mode = self.game_mode_label();
+            self.message = Some(format!("Mode: {} — New game started!", mode));
+        }
+
+        if self.is_current_player_ai() {
+            self.ai_move_pending = true;
+        }
+    }
+
+    fn toggle_pg(&mut self) {
+        self.yellow_player = match self.yellow_player {
+            PlayerKind::Human => {
+                let agent = PolicyGradientAgent::new(PgConfig::default());
+
+                let manager = CheckpointManager::new(CheckpointManagerConfig {
+                    checkpoint_dir: std::path::PathBuf::from("pg_checkpoints"),
+                    ..Default::default()
+                });
+                let (boxed_agent, load_msg) = match manager.load_pg_latest() {
+                    Ok(data) => {
+                        let mut a = agent;
+                        match a.load_from_dir(&data.path) {
+                            Ok(()) => {
+                                let msg = format!("PG loaded (episode {})", data.metadata.episode);
+                                (a, msg)
+                            }
+                            Err(_) => (a, "PG (failed to load checkpoint)".to_string()),
+                        }
+                    }
+                    Err(_) => (agent, "PG (untrained, no checkpoint)".to_string()),
+                };
+                self.message = Some(load_msg);
+                PlayerKind::Ai(Box::new(boxed_agent))
             }
             PlayerKind::Ai(_) => PlayerKind::Human,
         };
