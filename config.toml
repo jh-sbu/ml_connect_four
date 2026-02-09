@@ -1,0 +1,38 @@
+# ML Connect Four - Configuration
+#
+# All values below are the defaults. Uncomment and modify as needed.
+# Partial files are supported — any omitted fields use their default values.
+
+# [dqn]
+# learning_rate = 0.0001
+# gamma = 0.99
+# epsilon_start = 1.0
+# epsilon_end = 0.1
+# epsilon_decay_episodes = 10000
+# target_update_interval = 1000
+# batch_size = 64
+# replay_capacity = 50000
+# min_replay_size = 1000
+
+# [pg]
+# learning_rate = 0.0003
+# gamma = 0.99
+# gae_lambda = 0.95
+# ppo_epsilon = 0.2
+# entropy_coeff = 0.01
+# value_coeff = 0.5
+# ppo_epochs = 4
+# max_grad_norm = 0.5
+
+# [training]
+# num_episodes = 10000
+# log_interval = 100
+# eval_interval = 500
+# eval_games = 100
+# checkpoint_interval = 1000
+# checkpoint_dir = "checkpoints"
+
+# [checkpoint]
+# checkpoint_dir = "checkpoints"
+# keep_last_n = 5
+# keep_best_n = 3

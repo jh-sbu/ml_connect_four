@@ -13,6 +13,8 @@ use crate::training::dashboard_msg::{
 use crate::training::metrics::{EpisodeResult, TrainingMetrics};
 
 /// Trainer configuration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TrainerConfig {
     pub num_episodes: usize,
     pub log_interval: usize,
@@ -255,10 +257,18 @@ impl Trainer {
             let player = state.current_player();
             let action = agent.select_action(&state, true);
             move_records.push((state.clone(), action, player));
-            state = state.apply_move(action).expect("Agent selected illegal action");
+            state = state.apply_move(action).unwrap_or_else(|_| {
+                panic!(
+                    "DQN agent selected illegal action {} (legal: {:?})",
+                    action,
+                    state.legal_actions()
+                )
+            });
         }
 
-        let outcome = state.outcome().expect("Game should be terminal");
+        let outcome = state
+            .outcome()
+            .expect("terminal state must have an outcome");
         let experiences = Self::build_experiences(&move_records, &state, &outcome);
         let game_length = move_records.len();
 
@@ -284,7 +294,13 @@ impl Trainer {
             let player = state.current_player();
             let action = agent.select_action(&state, true);
             move_records.push((state.clone(), action, player));
-            state = state.apply_move(action).expect("Agent selected illegal action");
+            state = state.apply_move(action).unwrap_or_else(|_| {
+                panic!(
+                    "DQN agent selected illegal action {} (legal: {:?})",
+                    action,
+                    state.legal_actions()
+                )
+            });
             move_number += 1;
 
             // Send live game update every 4 moves
@@ -302,7 +318,9 @@ impl Trainer {
             move_number,
         }));
 
-        let outcome = state.outcome().expect("Game should be terminal");
+        let outcome = state
+            .outcome()
+            .expect("terminal state must have an outcome");
         let experiences = Self::build_experiences(&move_records, &state, &outcome);
         let game_length = move_records.len();
 
@@ -390,7 +408,13 @@ impl Trainer {
                 } else {
                     random.select_action(&state, false)
                 };
-                state = state.apply_move(action).expect("Illegal move during eval");
+                state = state.apply_move(action).unwrap_or_else(|_| {
+                    panic!(
+                        "illegal move {} during eval (legal: {:?})",
+                        action,
+                        state.legal_actions()
+                    )
+                });
             }
 
             if let Some(GameOutcome::Winner(winner)) = state.outcome() {
@@ -611,10 +635,18 @@ impl Trainer {
             let player = state.current_player();
             let action = agent.select_action(&state, true);
             move_records.push((state.clone(), action, player));
-            state = state.apply_move(action).expect("Agent selected illegal action");
+            state = state.apply_move(action).unwrap_or_else(|_| {
+                panic!(
+                    "PG agent selected illegal action {} (legal: {:?})",
+                    action,
+                    state.legal_actions()
+                )
+            });
         }
 
-        let outcome = state.outcome().expect("Game should be terminal");
+        let outcome = state
+            .outcome()
+            .expect("terminal state must have an outcome");
         let experiences = Self::build_experiences(&move_records, &state, &outcome);
         let game_length = move_records.len();
 
@@ -640,7 +672,13 @@ impl Trainer {
             let player = state.current_player();
             let action = agent.select_action(&state, true);
             move_records.push((state.clone(), action, player));
-            state = state.apply_move(action).expect("Agent selected illegal action");
+            state = state.apply_move(action).unwrap_or_else(|_| {
+                panic!(
+                    "PG agent selected illegal action {} (legal: {:?})",
+                    action,
+                    state.legal_actions()
+                )
+            });
             move_number += 1;
 
             if move_number % 4 == 0 {
@@ -656,7 +694,9 @@ impl Trainer {
             move_number,
         }));
 
-        let outcome = state.outcome().expect("Game should be terminal");
+        let outcome = state
+            .outcome()
+            .expect("terminal state must have an outcome");
         let experiences = Self::build_experiences(&move_records, &state, &outcome);
         let game_length = move_records.len();
 
@@ -685,7 +725,13 @@ impl Trainer {
                 } else {
                     random.select_action(&state, false)
                 };
-                state = state.apply_move(action).expect("Illegal move during eval");
+                state = state.apply_move(action).unwrap_or_else(|_| {
+                    panic!(
+                        "illegal move {} during eval (legal: {:?})",
+                        action,
+                        state.legal_actions()
+                    )
+                });
             }
 
             if let Some(GameOutcome::Winner(winner)) = state.outcome() {

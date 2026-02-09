@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,8 +8,11 @@ use crate::checkpoint::metadata::{
     CheckpointHyperparameters, CheckpointMetadata, CheckpointMetrics, DqnTrainingState,
     PgTrainingState,
 };
+use crate::error::CheckpointError;
 
 /// Configuration for the checkpoint manager.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CheckpointManagerConfig {
     pub checkpoint_dir: PathBuf,
     pub keep_last_n: usize,
@@ -27,6 +30,7 @@ impl Default for CheckpointManagerConfig {
 }
 
 /// Data returned when loading a DQN checkpoint.
+#[derive(Debug)]
 pub struct CheckpointData {
     pub path: PathBuf,
     pub metadata: CheckpointMetadata,
@@ -34,6 +38,7 @@ pub struct CheckpointData {
 }
 
 /// Data returned when loading a PG checkpoint.
+#[derive(Debug)]
 pub struct PgCheckpointData {
     pub path: PathBuf,
     pub metadata: CheckpointMetadata,
@@ -57,7 +62,7 @@ impl CheckpointManager {
         agent: &DqnAgent,
         metrics: &CheckpointMetrics,
         episode: usize,
-    ) -> Result<PathBuf, Box<dyn Error>> {
+    ) -> Result<PathBuf, CheckpointError> {
         let dir_name = format!("checkpoint_{:07}", episode);
         let tmp_dir = self.config.checkpoint_dir.join(format!("{}.tmp", dir_name));
         let final_dir = self.config.checkpoint_dir.join(&dir_name);
@@ -66,7 +71,9 @@ impl CheckpointManager {
         fs::create_dir_all(&tmp_dir)?;
 
         // Save network weights
-        agent.save_to_dir(&tmp_dir)?;
+        agent
+            .save_to_dir(&tmp_dir)
+            .map_err(|e| CheckpointError::ModelSave(e.to_string()))?;
 
         // Save training state
         let training_state = agent.training_state();
@@ -115,15 +122,31 @@ impl CheckpointManager {
     }
 
     /// Load checkpoint data from a specific directory.
-    pub fn load_checkpoint(&self, dir: &Path) -> Result<CheckpointData, Box<dyn Error>> {
+    pub fn load_checkpoint(&self, dir: &Path) -> Result<CheckpointData, CheckpointError> {
         let meta_path = dir.join("metadata.json");
         let ts_path = dir.join("training_state.json");
 
-        let meta_json = fs::read_to_string(&meta_path)?;
-        let metadata: CheckpointMetadata = serde_json::from_str(&meta_json)?;
+        let meta_json = fs::read_to_string(&meta_path).map_err(|e| {
+            CheckpointError::MetadataRead {
+                path: meta_path.clone(),
+                source: e,
+            }
+        })?;
+        let metadata: CheckpointMetadata =
+            serde_json::from_str(&meta_json).map_err(|e| CheckpointError::MetadataParse {
+                path: meta_path,
+                source: e,
+            })?;
 
-        let ts_json = fs::read_to_string(&ts_path)?;
-        let training_state: DqnTrainingState = serde_json::from_str(&ts_json)?;
+        let ts_json = fs::read_to_string(&ts_path).map_err(|e| CheckpointError::MetadataRead {
+            path: ts_path.clone(),
+            source: e,
+        })?;
+        let training_state: DqnTrainingState =
+            serde_json::from_str(&ts_json).map_err(|e| CheckpointError::MetadataParse {
+                path: ts_path,
+                source: e,
+            })?;
 
         Ok(CheckpointData {
             path: dir.to_path_buf(),
@@ -133,10 +156,12 @@ impl CheckpointManager {
     }
 
     /// Load the latest checkpoint (via the `latest` symlink).
-    pub fn load_latest(&self) -> Result<CheckpointData, Box<dyn Error>> {
+    pub fn load_latest(&self) -> Result<CheckpointData, CheckpointError> {
         let latest_link = self.config.checkpoint_dir.join("latest");
         if !latest_link.exists() {
-            return Err("No 'latest' symlink found".into());
+            return Err(CheckpointError::NoLatestSymlink(
+                self.config.checkpoint_dir.clone(),
+            ));
         }
         let resolved = fs::read_link(&latest_link)?;
         let target = if resolved.is_relative() {
@@ -153,7 +178,7 @@ impl CheckpointManager {
         agent: &PolicyGradientAgent,
         metrics: &CheckpointMetrics,
         episode: usize,
-    ) -> Result<PathBuf, Box<dyn Error>> {
+    ) -> Result<PathBuf, CheckpointError> {
         let dir_name = format!("checkpoint_{:07}", episode);
         let tmp_dir = self.config.checkpoint_dir.join(format!("{}.tmp", dir_name));
         let final_dir = self.config.checkpoint_dir.join(&dir_name);
@@ -161,7 +186,9 @@ impl CheckpointManager {
         fs::create_dir_all(&tmp_dir)?;
 
         // Save network weights
-        agent.save_to_dir(&tmp_dir)?;
+        agent
+            .save_to_dir(&tmp_dir)
+            .map_err(|e| CheckpointError::ModelSave(e.to_string()))?;
 
         // Save training state
         let training_state = agent.training_state();
@@ -207,15 +234,31 @@ impl CheckpointManager {
     }
 
     /// Load PG checkpoint data from a specific directory.
-    pub fn load_pg_checkpoint(&self, dir: &Path) -> Result<PgCheckpointData, Box<dyn Error>> {
+    pub fn load_pg_checkpoint(&self, dir: &Path) -> Result<PgCheckpointData, CheckpointError> {
         let meta_path = dir.join("metadata.json");
         let ts_path = dir.join("training_state.json");
 
-        let meta_json = fs::read_to_string(&meta_path)?;
-        let metadata: CheckpointMetadata = serde_json::from_str(&meta_json)?;
+        let meta_json = fs::read_to_string(&meta_path).map_err(|e| {
+            CheckpointError::MetadataRead {
+                path: meta_path.clone(),
+                source: e,
+            }
+        })?;
+        let metadata: CheckpointMetadata =
+            serde_json::from_str(&meta_json).map_err(|e| CheckpointError::MetadataParse {
+                path: meta_path,
+                source: e,
+            })?;
 
-        let ts_json = fs::read_to_string(&ts_path)?;
-        let training_state: PgTrainingState = serde_json::from_str(&ts_json)?;
+        let ts_json = fs::read_to_string(&ts_path).map_err(|e| CheckpointError::MetadataRead {
+            path: ts_path.clone(),
+            source: e,
+        })?;
+        let training_state: PgTrainingState =
+            serde_json::from_str(&ts_json).map_err(|e| CheckpointError::MetadataParse {
+                path: ts_path,
+                source: e,
+            })?;
 
         Ok(PgCheckpointData {
             path: dir.to_path_buf(),
@@ -225,10 +268,12 @@ impl CheckpointManager {
     }
 
     /// Load the latest PG checkpoint (via the `latest` symlink).
-    pub fn load_pg_latest(&self) -> Result<PgCheckpointData, Box<dyn Error>> {
+    pub fn load_pg_latest(&self) -> Result<PgCheckpointData, CheckpointError> {
         let latest_link = self.config.checkpoint_dir.join("latest");
         if !latest_link.exists() {
-            return Err("No 'latest' symlink found".into());
+            return Err(CheckpointError::NoLatestSymlink(
+                self.config.checkpoint_dir.clone(),
+            ));
         }
         let resolved = fs::read_link(&latest_link)?;
         let target = if resolved.is_relative() {
@@ -242,7 +287,7 @@ impl CheckpointManager {
     /// List all checkpoints sorted by episode (ascending).
     pub fn list_checkpoints(
         &self,
-    ) -> Result<Vec<(PathBuf, CheckpointMetadata)>, Box<dyn Error>> {
+    ) -> Result<Vec<(PathBuf, CheckpointMetadata)>, CheckpointError> {
         let mut results = Vec::new();
         for entry in fs::read_dir(&self.config.checkpoint_dir)? {
             let entry = entry?;
@@ -257,8 +302,18 @@ impl CheckpointManager {
             }
             let meta_path = path.join("metadata.json");
             if meta_path.exists() {
-                let meta_json = fs::read_to_string(&meta_path)?;
-                let metadata: CheckpointMetadata = serde_json::from_str(&meta_json)?;
+                let meta_json = fs::read_to_string(&meta_path).map_err(|e| {
+                    CheckpointError::MetadataRead {
+                        path: meta_path.clone(),
+                        source: e,
+                    }
+                })?;
+                let metadata: CheckpointMetadata = serde_json::from_str(&meta_json).map_err(
+                    |e| CheckpointError::MetadataParse {
+                        path: meta_path,
+                        source: e,
+                    },
+                )?;
                 results.push((path, metadata));
             }
         }
@@ -267,7 +322,7 @@ impl CheckpointManager {
     }
 
     /// Prune old checkpoints, keeping the union of the last N and best N by win_rate.
-    fn prune_old_checkpoints(&self) -> Result<(), Box<dyn Error>> {
+    fn prune_old_checkpoints(&self) -> Result<(), CheckpointError> {
         let checkpoints = self.list_checkpoints()?;
         if checkpoints.len() <= self.config.keep_last_n {
             return Ok(());
@@ -285,7 +340,7 @@ impl CheckpointManager {
             .enumerate()
             .map(|(i, (_, m))| (i, m.metrics.win_rate))
             .collect();
-        by_win_rate.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        by_win_rate.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         for (i, _) in by_win_rate.iter().take(self.config.keep_best_n) {
             keep.insert(*i);
         }
@@ -301,7 +356,7 @@ impl CheckpointManager {
     }
 
     /// Update the `latest` symlink to point to the given checkpoint directory name.
-    fn update_latest_symlink(&self, dir_name: &str) -> Result<(), Box<dyn Error>> {
+    fn update_latest_symlink(&self, dir_name: &str) -> Result<(), CheckpointError> {
         let link_path = self.config.checkpoint_dir.join("latest");
         // Remove old symlink if it exists
         if link_path.exists() || link_path.symlink_metadata().is_ok() {
@@ -509,5 +564,22 @@ mod tests {
         let mut new_agent = PolicyGradientAgent::new(PgConfig::default());
         new_agent.load_from_dir(&data.path).unwrap();
         new_agent.restore_training_state(&data.training_state);
+    }
+
+    #[test]
+    fn test_load_latest_no_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = CheckpointManagerConfig {
+            checkpoint_dir: dir.path().to_path_buf(),
+            keep_last_n: 5,
+            keep_best_n: 3,
+        };
+        let manager = CheckpointManager::new(config);
+
+        let err = manager.load_latest().unwrap_err();
+        assert!(
+            matches!(err, CheckpointError::NoLatestSymlink(_)),
+            "expected NoLatestSymlink, got: {err}"
+        );
     }
 }

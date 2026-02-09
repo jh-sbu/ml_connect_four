@@ -22,7 +22,8 @@ type InferBackend = Wgpu<f32, i32>;
 type TrainBackend = Autodiff<InferBackend>;
 
 /// Policy Gradient hyperparameters.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct PgConfig {
     pub learning_rate: f64,
     pub gamma: f32,
@@ -88,7 +89,7 @@ impl PolicyGradientAgent {
         let state_tensor =
             encode_state::<InferBackend>(state, &self.device).unsqueeze::<4>(); // [1, 3, 6, 7]
         let (logits, _value) = self.network.valid().forward(state_tensor);
-        let logits_vec: Vec<f32> = logits.into_data().to_vec().unwrap();
+        let logits_vec: Vec<f32> = logits.into_data().to_vec().expect("f32 tensor data extraction");
 
         // Apply legal action mask and compute softmax
         let probs = masked_softmax(&logits_vec, &legal);
@@ -187,7 +188,7 @@ impl PolicyGradientAgent {
             .iter()
             .flat_map(|e| {
                 let t = encode_state::<TrainBackend>(&e.state, &self.device);
-                let data: Vec<f32> = t.into_data().to_vec().unwrap();
+                let data: Vec<f32> = t.into_data().to_vec().expect("f32 tensor data extraction");
                 data
             })
             .collect();
@@ -263,7 +264,7 @@ impl PolicyGradientAgent {
             let value_loss = (value_diff.clone() * value_diff).mean();
 
             // Extract logits data for entropy reporting before consuming logits_batch
-            let logits_data: Vec<f32> = logits_batch.clone().into_data().to_vec().unwrap();
+            let logits_data: Vec<f32> = logits_batch.clone().into_data().to_vec().expect("f32 tensor data extraction");
 
             // Entropy bonus from log_probs_tensor
             let probs_tensor = burn::tensor::activation::softmax(logits_batch, 1);
@@ -274,7 +275,11 @@ impl PolicyGradientAgent {
                 + value_loss * self.config.value_coeff
                 - entropy_tensor * self.config.entropy_coeff;
 
-            last_loss = total_loss.clone().into_data().to_vec::<f32>().unwrap()[0];
+            last_loss = total_loss
+                .clone()
+                .into_data()
+                .to_vec::<f32>()
+                .expect("f32 loss tensor extraction")[0];
 
             // Compute entropy scalar for reporting (from detached data)
             let mut entropy_sum = 0.0f32;
@@ -308,7 +313,7 @@ impl PolicyGradientAgent {
             let state_tensor =
                 encode_state::<InferBackend>(&exp.state, &self.device).unsqueeze::<4>();
             let (_logits, value) = infer_net.forward(state_tensor);
-            let v: Vec<f32> = value.into_data().to_vec().unwrap();
+            let v: Vec<f32> = value.into_data().to_vec().expect("f32 tensor data extraction");
             values.push(v[0]);
         }
 
@@ -324,7 +329,7 @@ impl PolicyGradientAgent {
             let state_tensor =
                 encode_state::<InferBackend>(&exp.state, &self.device).unsqueeze::<4>();
             let (logits, _) = infer_net.forward(state_tensor);
-            let logits_vec: Vec<f32> = logits.into_data().to_vec().unwrap();
+            let logits_vec: Vec<f32> = logits.into_data().to_vec().expect("f32 tensor data extraction");
 
             let legal = exp.state.legal_actions();
             let (lp, _) = masked_log_softmax(&logits_vec, &legal);

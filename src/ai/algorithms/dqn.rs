@@ -23,7 +23,8 @@ type InferBackend = Wgpu<f32, i32>;
 type TrainBackend = Autodiff<InferBackend>;
 
 /// DQN hyperparameters.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DqnConfig {
     pub learning_rate: f64,
     pub gamma: f32,
@@ -107,7 +108,10 @@ impl DqnAgent {
         let state_tensor = encode_state::<InferBackend>(state, &self.device)
             .unsqueeze::<4>(); // [1, 3, 6, 7]
         let q_values = self.target_network.forward(state_tensor); // [1, 7]
-        let q_vec: Vec<f32> = q_values.into_data().to_vec().unwrap();
+        let q_vec: Vec<f32> = q_values
+            .into_data()
+            .to_vec()
+            .expect("f32 tensor data extraction");
 
         // Pick legal action with highest Q-value
         let mut best_action = legal[0];
@@ -154,7 +158,10 @@ impl DqnAgent {
         // Compute targets using target network (inference backend, no grad)
         let next_state_tensors = encode_states_batch::<InferBackend>(&next_states, &self.device);
         let next_q_all = self.target_network.forward(next_state_tensors); // [B, 7]
-        let next_q_data: Vec<f32> = next_q_all.into_data().to_vec().unwrap();
+        let next_q_data: Vec<f32> = next_q_all
+            .into_data()
+            .to_vec()
+            .expect("f32 tensor data extraction");
 
         // For each experience, compute target = reward + gamma * max_legal_q (if not done)
         let mut target_data = Vec::with_capacity(batch_size);
@@ -187,7 +194,11 @@ impl DqnAgent {
         let loss = (diff.clone() * diff).mean();
 
         // Extract scalar loss value before backward
-        let loss_val: f32 = loss.clone().into_data().to_vec::<f32>().unwrap()[0];
+        let loss_val: f32 = loss
+            .clone()
+            .into_data()
+            .to_vec::<f32>()
+            .expect("f32 loss tensor extraction")[0];
 
         // Backward pass
         let grads = loss.backward();

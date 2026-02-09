@@ -6,7 +6,14 @@ use ml_connect_four::ui::App;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
-fn main() -> io::Result<()> {
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> io::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -18,14 +25,10 @@ fn main() -> io::Result<()> {
     let mut app = App::new();
     let res = app.run(&mut terminal);
 
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    // Restore terminal — always runs, even on error
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
 
-    if let Err(err) = res {
-        eprintln!("Error: {:?}", err);
-    }
-
-    Ok(())
+    res
 }

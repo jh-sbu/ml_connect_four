@@ -1,3 +1,6 @@
+//! Checkpoint system for saving and loading trained models, with metadata
+//! tracking, symlink-based latest resolution, and automatic pruning.
+
 mod manager;
 mod metadata;
 

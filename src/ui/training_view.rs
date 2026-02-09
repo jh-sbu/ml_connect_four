@@ -158,12 +158,12 @@ fn render_win_rate_chart(frame: &mut Frame, dashboard: &DashboardState, area: Re
 fn render_loss_chart(frame: &mut Frame, dashboard: &DashboardState, area: Rect) {
     let loss_data: Vec<(f64, f64)> = dashboard.loss_history.iter().copied().collect();
 
-    let (x_min, x_max) = if loss_data.is_empty() {
-        (0.0, dashboard.total_episodes.max(1) as f64)
+    let (x_min, x_max) = if let (Some(first), Some(last)) =
+        (loss_data.first(), loss_data.last())
+    {
+        (first.0, last.0.max(first.0 + 1.0))
     } else {
-        let first = loss_data.first().unwrap().0;
-        let last = loss_data.last().unwrap().0;
-        (first, last.max(first + 1.0))
+        (0.0, dashboard.total_episodes.max(1) as f64)
     };
 
     let y_max = loss_data

@@ -1,3 +1,6 @@
+//! AI agent infrastructure: trait definitions, algorithm implementations (DQN,
+//! Policy Gradient), neural network architectures, and board-to-tensor encoding.
+
 mod agent;
 pub mod algorithms;
 pub mod networks;
