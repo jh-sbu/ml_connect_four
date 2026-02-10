@@ -44,6 +44,7 @@ impl AppConfig {
         if path.exists() {
             Self::load(path)
         } else {
+            eprintln!("Warning: config file '{}' not found, using defaults", path.display());
             Ok(Self::default())
         }
     }
@@ -80,6 +81,66 @@ impl AppConfig {
                 "pg.gamma must be in [0, 1]".into(),
             ));
         }
+
+        // DQN epsilon validations
+        if self.dqn.epsilon_start < 0.0 || self.dqn.epsilon_start > 1.0 {
+            return Err(ConfigError::Validation(
+                "dqn.epsilon_start must be in [0, 1]".into(),
+            ));
+        }
+        if self.dqn.epsilon_end < 0.0 || self.dqn.epsilon_end > 1.0 {
+            return Err(ConfigError::Validation(
+                "dqn.epsilon_end must be in [0, 1]".into(),
+            ));
+        }
+        if self.dqn.epsilon_end > self.dqn.epsilon_start {
+            return Err(ConfigError::Validation(
+                "dqn.epsilon_end must be <= dqn.epsilon_start".into(),
+            ));
+        }
+        if self.dqn.replay_capacity < self.dqn.batch_size {
+            return Err(ConfigError::Validation(
+                "dqn.replay_capacity must be >= dqn.batch_size".into(),
+            ));
+        }
+        if self.dqn.min_replay_size < self.dqn.batch_size {
+            return Err(ConfigError::Validation(
+                "dqn.min_replay_size must be >= dqn.batch_size".into(),
+            ));
+        }
+
+        // PG validations
+        if self.pg.gae_lambda < 0.0 || self.pg.gae_lambda > 1.0 {
+            return Err(ConfigError::Validation(
+                "pg.gae_lambda must be in [0, 1]".into(),
+            ));
+        }
+        if self.pg.ppo_epsilon <= 0.0 {
+            return Err(ConfigError::Validation(
+                "pg.ppo_epsilon must be > 0".into(),
+            ));
+        }
+        if self.pg.ppo_epochs == 0 {
+            return Err(ConfigError::Validation(
+                "pg.ppo_epochs must be > 0".into(),
+            ));
+        }
+        if self.pg.entropy_coeff < 0.0 {
+            return Err(ConfigError::Validation(
+                "pg.entropy_coeff must be >= 0".into(),
+            ));
+        }
+        if self.pg.value_coeff < 0.0 {
+            return Err(ConfigError::Validation(
+                "pg.value_coeff must be >= 0".into(),
+            ));
+        }
+        if self.pg.max_grad_norm <= 0.0 {
+            return Err(ConfigError::Validation(
+                "pg.max_grad_norm must be > 0".into(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -174,5 +235,85 @@ num_episodes = 500
         let toml_str = AppConfig::default_toml();
         let config: AppConfig = toml::from_str(&toml_str).unwrap();
         config.validate().expect("roundtripped config should be valid");
+    }
+
+    #[test]
+    fn test_validation_rejects_epsilon_start_out_of_range() {
+        let mut config = AppConfig::default();
+        config.dqn.epsilon_start = 1.5;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_epsilon_end_out_of_range() {
+        let mut config = AppConfig::default();
+        config.dqn.epsilon_end = -0.1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_epsilon_end_gt_start() {
+        let mut config = AppConfig::default();
+        config.dqn.epsilon_start = 0.1;
+        config.dqn.epsilon_end = 0.5;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_replay_capacity_lt_batch() {
+        let mut config = AppConfig::default();
+        config.dqn.replay_capacity = 10;
+        config.dqn.batch_size = 64;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_min_replay_lt_batch() {
+        let mut config = AppConfig::default();
+        config.dqn.min_replay_size = 10;
+        config.dqn.batch_size = 64;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_gae_lambda_out_of_range() {
+        let mut config = AppConfig::default();
+        config.pg.gae_lambda = 1.5;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_ppo_epsilon_zero() {
+        let mut config = AppConfig::default();
+        config.pg.ppo_epsilon = 0.0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_ppo_epochs_zero() {
+        let mut config = AppConfig::default();
+        config.pg.ppo_epochs = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_negative_entropy_coeff() {
+        let mut config = AppConfig::default();
+        config.pg.entropy_coeff = -0.01;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_negative_value_coeff() {
+        let mut config = AppConfig::default();
+        config.pg.value_coeff = -0.5;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_max_grad_norm_zero() {
+        let mut config = AppConfig::default();
+        config.pg.max_grad_norm = 0.0;
+        assert!(config.validate().is_err());
     }
 }

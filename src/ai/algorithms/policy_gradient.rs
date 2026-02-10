@@ -4,6 +4,7 @@ use std::path::Path;
 use burn::backend::Autodiff;
 use burn::backend::Wgpu;
 use burn::module::AutodiffModule;
+use burn::grad_clipping::GradientClippingConfig;
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
 use burn::record::DefaultRecorder;
@@ -67,7 +68,9 @@ impl PolicyGradientAgent {
         let device = Default::default();
         let net_config = PolicyValueNetworkConfig {};
         let network: PolicyValueNetwork<TrainBackend> = net_config.init(&device);
-        let optimizer = AdamConfig::new().init();
+        let optimizer = AdamConfig::new()
+            .with_grad_clipping(Some(GradientClippingConfig::Norm(config.max_grad_norm)))
+            .init();
 
         PolicyGradientAgent {
             network,
@@ -443,6 +446,10 @@ impl PolicyGradientAgent {
             ppo_epochs: state.ppo_epochs,
             max_grad_norm: state.max_grad_norm,
         };
+        // Re-create optimizer so restored max_grad_norm takes effect
+        self.optimizer = AdamConfig::new()
+            .with_grad_clipping(Some(GradientClippingConfig::Norm(self.config.max_grad_norm)))
+            .init();
     }
 }
 

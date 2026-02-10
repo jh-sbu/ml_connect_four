@@ -25,6 +25,19 @@ pub struct CheckpointHyperparameters {
     pub epsilon_decay_episodes: usize,
 }
 
+/// PG-specific hyperparameters recorded in checkpoint metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PgHyperparameters {
+    pub learning_rate: f64,
+    pub gamma: f32,
+    pub gae_lambda: f32,
+    pub ppo_epsilon: f32,
+    pub entropy_coeff: f32,
+    pub value_coeff: f32,
+    pub ppo_epochs: usize,
+    pub max_grad_norm: f32,
+}
+
 /// Top-level checkpoint metadata written to metadata.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointMetadata {
@@ -33,6 +46,8 @@ pub struct CheckpointMetadata {
     pub algorithm: String,
     pub metrics: CheckpointMetrics,
     pub hyperparameters: CheckpointHyperparameters,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pg_hyperparameters: Option<PgHyperparameters>,
 }
 
 /// DQN-specific training state written to training_state.json.

@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::ai::algorithms::{DqnAgent, PolicyGradientAgent};
 use crate::checkpoint::metadata::{
     CheckpointHyperparameters, CheckpointMetadata, CheckpointMetrics, DqnTrainingState,
-    PgTrainingState,
+    PgHyperparameters, PgTrainingState,
 };
 use crate::error::CheckpointError;
 
@@ -102,6 +102,7 @@ impl CheckpointManager {
                 epsilon_end: training_state.epsilon_end,
                 epsilon_decay_episodes: training_state.epsilon_decay_episodes,
             },
+            pg_hyperparameters: None,
         };
         let meta_json = serde_json::to_string_pretty(&metadata)?;
         fs::write(tmp_dir.join("metadata.json"), meta_json)?;
@@ -217,6 +218,16 @@ impl CheckpointManager {
                 epsilon_end: 0.0,
                 epsilon_decay_episodes: 0,
             },
+            pg_hyperparameters: Some(PgHyperparameters {
+                learning_rate: training_state.learning_rate,
+                gamma: training_state.gamma,
+                gae_lambda: training_state.gae_lambda,
+                ppo_epsilon: training_state.ppo_epsilon,
+                entropy_coeff: training_state.entropy_coeff,
+                value_coeff: training_state.value_coeff,
+                ppo_epochs: training_state.ppo_epochs,
+                max_grad_norm: training_state.max_grad_norm,
+            }),
         };
         let meta_json = serde_json::to_string_pretty(&metadata)?;
         fs::write(tmp_dir.join("metadata.json"), meta_json)?;
@@ -451,6 +462,7 @@ mod tests {
                 epsilon_end: 0.1,
                 epsilon_decay_episodes: 10000,
             },
+            pg_hyperparameters: None,
         };
 
         let json = serde_json::to_string_pretty(&meta).unwrap();
@@ -458,6 +470,7 @@ mod tests {
         assert_eq!(deserialized.episode, 5000);
         assert_eq!(deserialized.algorithm, "DQN");
         assert!((deserialized.metrics.win_rate - 0.65).abs() < 1e-6);
+        assert!(deserialized.pg_hyperparameters.is_none());
     }
 
     #[test]
@@ -580,6 +593,105 @@ mod tests {
         assert!(
             matches!(err, CheckpointError::NoLatestSymlink(_)),
             "expected NoLatestSymlink, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_pg_checkpoint_records_hyperparameters() {
+        use crate::ai::algorithms::{PgConfig, PolicyGradientAgent};
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = CheckpointManagerConfig {
+            checkpoint_dir: dir.path().to_path_buf(),
+            keep_last_n: 5,
+            keep_best_n: 3,
+        };
+        let manager = CheckpointManager::new(config);
+        let pg_config = PgConfig {
+            learning_rate: 1e-3,
+            gamma: 0.98,
+            gae_lambda: 0.90,
+            ppo_epsilon: 0.15,
+            entropy_coeff: 0.02,
+            value_coeff: 0.6,
+            ppo_epochs: 3,
+            max_grad_norm: 1.0,
+        };
+        let agent = PolicyGradientAgent::new(pg_config.clone());
+
+        let path = manager
+            .save_pg_checkpoint(&agent, &test_metrics(), 500)
+            .unwrap();
+        let data = manager.load_pg_checkpoint(&path).unwrap();
+        let pg_hp = data
+            .metadata
+            .pg_hyperparameters
+            .expect("PG checkpoint should have pg_hyperparameters");
+
+        assert!((pg_hp.learning_rate - 1e-3).abs() < 1e-9);
+        assert!((pg_hp.gamma - 0.98).abs() < 1e-6);
+        assert!((pg_hp.gae_lambda - 0.90).abs() < 1e-6);
+        assert!((pg_hp.ppo_epsilon - 0.15).abs() < 1e-6);
+        assert!((pg_hp.entropy_coeff - 0.02).abs() < 1e-6);
+        assert!((pg_hp.value_coeff - 0.6).abs() < 1e-6);
+        assert_eq!(pg_hp.ppo_epochs, 3);
+        assert!((pg_hp.max_grad_norm - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_dqn_checkpoint_has_no_pg_hyperparameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = CheckpointManagerConfig {
+            checkpoint_dir: dir.path().to_path_buf(),
+            keep_last_n: 5,
+            keep_best_n: 3,
+        };
+        let manager = CheckpointManager::new(config);
+        let agent = DqnAgent::new(DqnConfig::default());
+
+        let path = manager
+            .save_checkpoint(&agent, &test_metrics(), 100)
+            .unwrap();
+        let data = manager.load_checkpoint(&path).unwrap();
+        assert!(
+            data.metadata.pg_hyperparameters.is_none(),
+            "DQN checkpoint should not have pg_hyperparameters"
+        );
+    }
+
+    #[test]
+    fn test_backward_compat_old_checkpoint_json() {
+        // Simulate old-format JSON (no pg_hyperparameters key)
+        let json = r#"{
+            "episode": 1000,
+            "timestamp": 1700000000,
+            "algorithm": "DQN",
+            "metrics": {
+                "win_rate": 0.5,
+                "draw_rate": 0.1,
+                "average_game_length": 20.0,
+                "current_loss": 0.05,
+                "training_steps": 500
+            },
+            "hyperparameters": {
+                "learning_rate": 0.0001,
+                "gamma": 0.99,
+                "epsilon": 0.5,
+                "batch_size": 64,
+                "target_update_interval": 1000,
+                "replay_capacity": 50000,
+                "min_replay_size": 1000,
+                "epsilon_start": 1.0,
+                "epsilon_end": 0.1,
+                "epsilon_decay_episodes": 10000
+            }
+        }"#;
+
+        let meta: CheckpointMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.episode, 1000);
+        assert!(
+            meta.pg_hyperparameters.is_none(),
+            "old checkpoint JSON should deserialize with pg_hyperparameters = None"
         );
     }
 }

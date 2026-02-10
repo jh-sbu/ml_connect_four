@@ -220,6 +220,10 @@ impl DqnAgent {
 
     /// Decay epsilon linearly over configured episodes.
     fn decay_epsilon(&mut self) {
+        if self.config.epsilon_decay_episodes == 0 {
+            self.epsilon = self.config.epsilon_end;
+            return;
+        }
         let progress = (self.episode_count as f32)
             / (self.config.epsilon_decay_episodes as f32);
         let progress = progress.min(1.0);
@@ -329,8 +333,9 @@ impl Agent for DqnAgent {
         self.episode_count += 1;
         self.decay_epsilon();
 
-        // Train if enough experiences
-        if self.replay_buffer.len() >= self.config.min_replay_size {
+        // Train if enough experiences (guard against min_replay_size < batch_size)
+        let threshold = self.config.min_replay_size.max(self.config.batch_size);
+        if self.replay_buffer.len() >= threshold {
             let loss = self.train_step();
             UpdateMetrics {
                 loss,
@@ -431,5 +436,60 @@ mod tests {
             agent.epsilon(),
             expected
         );
+    }
+
+    #[test]
+    fn test_dqn_epsilon_decay_zero_episodes() {
+        let mut agent = DqnAgent::new(DqnConfig {
+            epsilon_start: 1.0,
+            epsilon_end: 0.05,
+            epsilon_decay_episodes: 0,
+            min_replay_size: 999_999,
+            ..Default::default()
+        });
+
+        let dummy_exp = vec![Experience {
+            state: GameState::initial(),
+            action: 0,
+            reward: 0.0,
+            next_state: GameState::initial().apply_move(0).unwrap(),
+            done: false,
+            player: Player::Red,
+        }];
+
+        agent.batch_update(&dummy_exp);
+        assert!(
+            (agent.epsilon() - 0.05).abs() < 1e-6,
+            "epsilon should jump to epsilon_end, got {}",
+            agent.epsilon()
+        );
+    }
+
+    #[test]
+    fn test_dqn_no_panic_min_replay_less_than_batch() {
+        let mut agent = DqnAgent::new(DqnConfig {
+            min_replay_size: 2,
+            batch_size: 10,
+            ..Default::default()
+        });
+
+        let state = GameState::initial();
+        let next = state.apply_move(0).unwrap();
+
+        // Push 5 experiences (more than min_replay_size=2, but less than batch_size=10)
+        let exps: Vec<Experience> = (0..5)
+            .map(|_| Experience {
+                state: state.clone(),
+                action: 0,
+                reward: 0.0,
+                next_state: next.clone(),
+                done: false,
+                player: Player::Red,
+            })
+            .collect();
+
+        // Should NOT panic despite min_replay_size < batch_size
+        let metrics = agent.batch_update(&exps);
+        assert_eq!(metrics.loss, 0.0, "should skip training when buffer < batch_size");
     }
 }
