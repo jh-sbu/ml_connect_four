@@ -15,7 +15,7 @@ use rand::SeedableRng;
 
 use crate::ai::agent::{Agent, AgentMetrics, Experience, UpdateMetrics};
 use crate::ai::networks::{PolicyValueNetwork, PolicyValueNetworkConfig};
-use crate::ai::state_encoding::encode_state;
+use crate::ai::state_encoding::{encode_state, encode_states_batch};
 use crate::checkpoint::PgTrainingState;
 use crate::game::{GameState, Player};
 
@@ -186,69 +186,65 @@ impl PolicyGradientAgent {
             }
         }
 
-        // Encode all states once
-        let state_data: Vec<f32> = exps
-            .iter()
-            .flat_map(|e| {
-                let t = encode_state::<TrainBackend>(&e.state, &self.device);
-                let data: Vec<f32> = t.into_data().to_vec().expect("f32 tensor data extraction");
-                data
-            })
-            .collect();
+        // Encode all states once directly on GPU (no CPU roundtrip)
+        let states: Vec<GameState> = exps.iter().map(|e| e.state.clone()).collect();
+        let state_tensor_base = encode_states_batch::<TrainBackend>(&states, &self.device);
+
+        // Pre-compute constant tensors (hoisted out of PPO loop; clone is shallow/Arc)
+        let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+            TensorData::from(action_mask_data.as_slice()),
+            &self.device,
+        )
+        .reshape([n as i32, 7]);
+
+        let legal_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
+            TensorData::from(legal_mask_data.as_slice()),
+            &self.device,
+        )
+        .reshape([n as i32, 7]);
+
+        let old_lp_tensor = Tensor::<TrainBackend, 1>::from_data(
+            TensorData::from(old_log_probs.as_slice()),
+            &self.device,
+        );
+
+        let adv_tensor = Tensor::<TrainBackend, 1>::from_data(
+            TensorData::from(advantages.as_slice()),
+            &self.device,
+        );
+
+        let returns_tensor = Tensor::<TrainBackend, 1>::from_data(
+            TensorData::from(returns.as_slice()),
+            &self.device,
+        )
+        .reshape([n as i32, 1]);
 
         // PPO optimization loop
         let mut last_loss = 0.0f32;
         let mut last_entropy = 0.0f32;
 
         for _epoch in 0..self.config.ppo_epochs {
-            let state_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::from(state_data.as_slice()),
-                &self.device,
-            )
-            .reshape([n as i32, 3, 6, 7]);
-
-            let (logits_batch, values_batch) = self.network.forward(state_tensor);
+            let (logits_batch, values_batch) =
+                self.network.forward(state_tensor_base.clone());
 
             // Apply legal action mask to logits for proper softmax
-            let mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::from(legal_mask_data.as_slice()),
-                &self.device,
-            )
-            .reshape([n as i32, 7]);
-
-            let masked_logits = logits_batch.clone() + mask_tensor;
+            let masked_logits = logits_batch.clone() + legal_mask_tensor.clone();
             let log_probs_tensor = burn::tensor::activation::log_softmax(masked_logits.clone(), 1);
 
             // Extract log pi(a|s) for selected actions: [n]
-            let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::from(action_mask_data.as_slice()),
-                &self.device,
-            )
-            .reshape([n as i32, 7]);
-            let selected_log_probs =
-                (log_probs_tensor.clone() * action_mask_tensor).sum_dim(1).reshape([n as i32]);
-
-            // Old log probs (detached, no grad)
-            let old_lp_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::from(old_log_probs.as_slice()),
-                &self.device,
-            );
+            let selected_log_probs = (log_probs_tensor.clone() * action_mask_tensor.clone())
+                .sum_dim(1)
+                .reshape([n as i32]);
 
             // Ratio r = exp(log_pi_new - log_pi_old)
-            let ratio_tensor = (selected_log_probs - old_lp_tensor).exp();
-
-            // Advantages tensor (detached)
-            let adv_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::from(advantages.as_slice()),
-                &self.device,
-            );
+            let ratio_tensor = (selected_log_probs - old_lp_tensor.clone()).exp();
 
             let surr1 = ratio_tensor.clone() * adv_tensor.clone();
             let clamped_ratio = ratio_tensor.clamp(
                 1.0 - self.config.ppo_epsilon,
                 1.0 + self.config.ppo_epsilon,
             );
-            let surr2 = clamped_ratio * adv_tensor;
+            let surr2 = clamped_ratio * adv_tensor.clone();
 
             // PPO clipped objective: min(surr1, surr2)
             // min(a, b) = (a + b - |a - b|) / 2
@@ -258,12 +254,7 @@ impl PolicyGradientAgent {
             let policy_loss = -policy_objective.mean();
 
             // Value loss: MSE(predicted_value, returns)
-            let returns_tensor = Tensor::<TrainBackend, 1>::from_data(
-                TensorData::from(returns.as_slice()),
-                &self.device,
-            )
-            .reshape([n as i32, 1]);
-            let value_diff = values_batch - returns_tensor;
+            let value_diff = values_batch - returns_tensor.clone();
             let value_loss = (value_diff.clone() * value_diff).mean();
 
             // Extract logits data for entropy reporting before consuming logits_batch
@@ -311,33 +302,39 @@ impl PolicyGradientAgent {
 
     /// Compute state values for experiences using inference network (no gradient).
     fn compute_values_no_grad(&self, exps: &[&Experience]) -> Vec<f32> {
-        let mut values = Vec::with_capacity(exps.len());
-        let infer_net = self.network.valid();
-
-        for exp in exps {
-            let state_tensor =
-                encode_state::<InferBackend>(&exp.state, &self.device).unsqueeze::<4>();
-            let (_logits, value) = infer_net.forward(state_tensor);
-            let v: Vec<f32> = value.into_data().to_vec().expect("f32 tensor data extraction");
-            values.push(v[0]);
+        if exps.is_empty() {
+            return Vec::new();
         }
-
-        values
+        let states: Vec<GameState> = exps.iter().map(|e| e.state.clone()).collect();
+        let state_batch = encode_states_batch::<InferBackend>(&states, &self.device);
+        let infer_net = self.network.valid();
+        let (_logits, values_batch) = infer_net.forward(state_batch);
+        values_batch
+            .reshape([exps.len() as i32])
+            .into_data()
+            .to_vec()
+            .expect("f32 tensor data extraction")
     }
 
     /// Compute log probabilities of taken actions (no gradient).
     fn compute_log_probs_no_grad(&self, exps: &[&Experience]) -> Vec<f32> {
-        let mut log_probs = Vec::with_capacity(exps.len());
+        if exps.is_empty() {
+            return Vec::new();
+        }
+        let states: Vec<GameState> = exps.iter().map(|e| e.state.clone()).collect();
+        let state_batch = encode_states_batch::<InferBackend>(&states, &self.device);
         let infer_net = self.network.valid();
+        let (logits_batch, _) = infer_net.forward(state_batch);
+        let logits_data: Vec<f32> = logits_batch
+            .into_data()
+            .to_vec()
+            .expect("f32 tensor data extraction");
 
-        for exp in exps {
-            let state_tensor =
-                encode_state::<InferBackend>(&exp.state, &self.device).unsqueeze::<4>();
-            let (logits, _) = infer_net.forward(state_tensor);
-            let logits_vec: Vec<f32> = logits.into_data().to_vec().expect("f32 tensor data extraction");
-
+        let mut log_probs = Vec::with_capacity(exps.len());
+        for (i, exp) in exps.iter().enumerate() {
+            let logits_i: Vec<f32> = (0..7).map(|j| logits_data[i * 7 + j]).collect();
             let legal = exp.state.legal_actions();
-            let (lp, _) = masked_log_softmax(&logits_vec, &legal);
+            let (lp, _) = masked_log_softmax(&logits_i, &legal);
             log_probs.push(lp[exp.action]);
         }
 

@@ -22,6 +22,7 @@ pub struct TrainerConfig {
     pub eval_games: usize,
     pub checkpoint_interval: usize,
     pub checkpoint_dir: PathBuf,
+    pub live_update_interval: usize,
 }
 
 impl Default for TrainerConfig {
@@ -33,6 +34,7 @@ impl Default for TrainerConfig {
             eval_games: 100,
             checkpoint_interval: 1000,
             checkpoint_dir: PathBuf::from("checkpoints"),
+            live_update_interval: 4,
         }
     }
 }
@@ -92,20 +94,26 @@ impl Trainer {
                 );
             }
 
-            if episode % self.config.eval_interval == 0 {
-                let eval_wr = self.evaluate(agent);
+            let needs_eval = episode % self.config.eval_interval == 0;
+            let needs_checkpoint = episode % self.config.checkpoint_interval == 0;
+            let eval_wr = if needs_eval || needs_checkpoint {
+                Some(self.evaluate(agent))
+            } else {
+                None
+            };
+
+            if needs_eval {
                 println!(
                     "  >> Eval vs Random ({} games): {:.1}% win rate",
                     self.config.eval_games,
-                    eval_wr * 100.0
+                    eval_wr.unwrap() * 100.0
                 );
             }
 
-            if episode % self.config.checkpoint_interval == 0 {
-                let eval_wr = self.evaluate(agent);
+            if needs_checkpoint {
                 let window = self.config.log_interval;
                 let ckpt_metrics = CheckpointMetrics {
-                    win_rate: eval_wr,
+                    win_rate: eval_wr.unwrap(),
                     draw_rate: metrics.draw_rate(window),
                     average_game_length: metrics.average_game_length(window),
                     current_loss: metrics.average_loss(window),
@@ -199,18 +207,26 @@ impl Trainer {
                 let _ = tx.send(TrainingUpdate::Metrics(snap));
             }
 
-            // Eval
-            if episode % self.config.eval_interval == 0 {
-                let eval_wr = self.evaluate(agent);
+            // Eval and checkpoint (share a single evaluate call)
+            let needs_eval = episode % self.config.eval_interval == 0;
+            let needs_checkpoint = episode % self.config.checkpoint_interval == 0;
+            let eval_wr = if needs_eval || needs_checkpoint {
+                Some(self.evaluate(agent))
+            } else {
+                None
+            };
+
+            if needs_eval {
                 let _ = tx.send(TrainingUpdate::EvalResult {
                     episode,
-                    win_rate: eval_wr,
+                    win_rate: eval_wr.unwrap(),
                 });
             }
 
-            // Checkpoint
-            if episode % self.config.checkpoint_interval == 0 {
-                self.save_checkpoint_with_tx(agent, &metrics, episode, &tx);
+            if needs_checkpoint {
+                self.save_checkpoint_with_tx_precomputed(
+                    agent, &metrics, episode, eval_wr.unwrap(), &tx,
+                );
             }
         }
 
@@ -225,6 +241,17 @@ impl Trainer {
         tx: &mpsc::Sender<TrainingUpdate>,
     ) {
         let eval_wr = self.evaluate(agent);
+        self.save_checkpoint_with_tx_precomputed(agent, metrics, episode, eval_wr, tx);
+    }
+
+    fn save_checkpoint_with_tx_precomputed(
+        &self,
+        agent: &mut DqnAgent,
+        metrics: &TrainingMetrics,
+        episode: usize,
+        eval_wr: f32,
+        tx: &mpsc::Sender<TrainingUpdate>,
+    ) {
         let window = self.config.log_interval;
         let ckpt_metrics = CheckpointMetrics {
             win_rate: eval_wr,
@@ -303,8 +330,8 @@ impl Trainer {
             });
             move_number += 1;
 
-            // Send live game update every 4 moves
-            if move_number % 4 == 0 {
+            // Send live game update periodically
+            if move_number % self.config.live_update_interval == 0 {
                 let _ = tx.send(TrainingUpdate::LiveGame(LiveGameState {
                     game_state: state.clone(),
                     move_number,
@@ -475,20 +502,26 @@ impl Trainer {
                 );
             }
 
-            if episode % self.config.eval_interval == 0 {
-                let eval_wr = self.evaluate_pg(agent);
+            let needs_eval = episode % self.config.eval_interval == 0;
+            let needs_checkpoint = episode % self.config.checkpoint_interval == 0;
+            let eval_wr = if needs_eval || needs_checkpoint {
+                Some(self.evaluate_pg(agent))
+            } else {
+                None
+            };
+
+            if needs_eval {
                 println!(
                     "  >> Eval vs Random ({} games): {:.1}% win rate",
                     self.config.eval_games,
-                    eval_wr * 100.0
+                    eval_wr.unwrap() * 100.0
                 );
             }
 
-            if episode % self.config.checkpoint_interval == 0 {
-                let eval_wr = self.evaluate_pg(agent);
+            if needs_checkpoint {
                 let window = self.config.log_interval;
                 let ckpt_metrics = CheckpointMetrics {
-                    win_rate: eval_wr,
+                    win_rate: eval_wr.unwrap(),
                     draw_rate: metrics.draw_rate(window),
                     average_game_length: metrics.average_game_length(window),
                     current_loss: metrics.average_loss(window),
@@ -580,16 +613,25 @@ impl Trainer {
                 let _ = tx.send(TrainingUpdate::Metrics(snap));
             }
 
-            if episode % self.config.eval_interval == 0 {
-                let eval_wr = self.evaluate_pg(agent);
+            let needs_eval = episode % self.config.eval_interval == 0;
+            let needs_checkpoint = episode % self.config.checkpoint_interval == 0;
+            let eval_wr = if needs_eval || needs_checkpoint {
+                Some(self.evaluate_pg(agent))
+            } else {
+                None
+            };
+
+            if needs_eval {
                 let _ = tx.send(TrainingUpdate::EvalResult {
                     episode,
-                    win_rate: eval_wr,
+                    win_rate: eval_wr.unwrap(),
                 });
             }
 
-            if episode % self.config.checkpoint_interval == 0 {
-                self.save_pg_checkpoint_with_tx(agent, &metrics, episode, &tx);
+            if needs_checkpoint {
+                self.save_pg_checkpoint_with_tx_precomputed(
+                    agent, &metrics, episode, eval_wr.unwrap(), &tx,
+                );
             }
         }
 
@@ -604,6 +646,17 @@ impl Trainer {
         tx: &mpsc::Sender<TrainingUpdate>,
     ) {
         let eval_wr = self.evaluate_pg(agent);
+        self.save_pg_checkpoint_with_tx_precomputed(agent, metrics, episode, eval_wr, tx);
+    }
+
+    fn save_pg_checkpoint_with_tx_precomputed(
+        &self,
+        agent: &mut PolicyGradientAgent,
+        metrics: &TrainingMetrics,
+        episode: usize,
+        eval_wr: f32,
+        tx: &mpsc::Sender<TrainingUpdate>,
+    ) {
         let window = self.config.log_interval;
         let ckpt_metrics = CheckpointMetrics {
             win_rate: eval_wr,
@@ -681,7 +734,7 @@ impl Trainer {
             });
             move_number += 1;
 
-            if move_number % 4 == 0 {
+            if move_number % self.config.live_update_interval == 0 {
                 let _ = tx.send(TrainingUpdate::LiveGame(LiveGameState {
                     game_state: state.clone(),
                     move_number,
@@ -761,6 +814,7 @@ mod tests {
             eval_games: 10,
             checkpoint_interval: 100_000, // no checkpoint in short run
             checkpoint_dir: PathBuf::from("/tmp/test_dashboard_ckpt"),
+            ..Default::default()
         };
         let trainer = Trainer::new(config);
         let mut agent = DqnAgent::new(DqnConfig {
@@ -798,6 +852,7 @@ mod tests {
             eval_games: 10,
             checkpoint_interval: 100_000,
             checkpoint_dir: PathBuf::from("/tmp/test_quit_ckpt"),
+            ..Default::default()
         };
         let trainer = Trainer::new(config);
         let mut agent = DqnAgent::new(DqnConfig {
@@ -845,6 +900,7 @@ mod tests {
             eval_games: 10,
             checkpoint_interval: 100_000,
             checkpoint_dir: PathBuf::from("/tmp/test_pg_train_ckpt"),
+            ..Default::default()
         };
         let trainer = Trainer::new(config);
         let mut agent = PolicyGradientAgent::new(PgConfig {
@@ -865,6 +921,7 @@ mod tests {
             eval_games: 10,
             checkpoint_interval: 100_000,
             checkpoint_dir: PathBuf::from("/tmp/test_pg_dashboard_ckpt"),
+            ..Default::default()
         };
         let trainer = Trainer::new(config);
         let mut agent = PolicyGradientAgent::new(PgConfig {

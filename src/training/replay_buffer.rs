@@ -1,5 +1,5 @@
-use rand::Rng;
 use rand::rngs::StdRng;
+use rand::seq::index;
 use rand::SeedableRng;
 
 use crate::ai::Experience;
@@ -40,14 +40,8 @@ impl ReplayBuffer {
     /// Sample a random batch of experiences.
     pub fn sample(&mut self, batch_size: usize) -> Vec<Experience> {
         assert!(batch_size <= self.len, "Not enough experiences to sample");
-        let mut indices = Vec::with_capacity(batch_size);
-        while indices.len() < batch_size {
-            let idx = self.rng.random_range(0..self.len);
-            if !indices.contains(&idx) {
-                indices.push(idx);
-            }
-        }
-        indices.iter().map(|&i| self.buffer[i].clone()).collect()
+        let indices = index::sample(&mut self.rng, self.len, batch_size);
+        indices.iter().map(|i| self.buffer[i].clone()).collect()
     }
 
     pub fn len(&self) -> usize {
