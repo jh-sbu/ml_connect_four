@@ -99,7 +99,7 @@ impl PolicyGradientAgent {
 
         if training {
             // Sample from categorical distribution
-            sample_categorical(&probs, &mut self.rng)
+            sample_categorical(&probs, &legal, &mut self.rng)
         } else {
             // Greedy: argmax over legal actions
             let mut best_action = legal[0];
@@ -217,7 +217,7 @@ impl PolicyGradientAgent {
             .reshape([n as i32, 7]);
 
             let masked_logits = logits_batch.clone() + mask_tensor;
-            let log_probs_tensor = burn::tensor::activation::log_softmax(masked_logits, 1);
+            let log_probs_tensor = burn::tensor::activation::log_softmax(masked_logits.clone(), 1);
 
             // Extract log pi(a|s) for selected actions: [n]
             let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
@@ -269,8 +269,8 @@ impl PolicyGradientAgent {
             // Extract logits data for entropy reporting before consuming logits_batch
             let logits_data: Vec<f32> = logits_batch.clone().into_data().to_vec().expect("f32 tensor data extraction");
 
-            // Entropy bonus from log_probs_tensor
-            let probs_tensor = burn::tensor::activation::softmax(logits_batch, 1);
+            // Entropy bonus from log_probs_tensor (use masked_logits for consistent distributions)
+            let probs_tensor = burn::tensor::activation::softmax(masked_logits, 1);
             let entropy_tensor = -(probs_tensor * log_probs_tensor).sum_dim(1).mean();
 
             // Total loss: policy_loss + value_coeff * value_loss - entropy_coeff * entropy
@@ -294,14 +294,16 @@ impl PolicyGradientAgent {
             }
             last_entropy = entropy_sum / n as f32;
 
-            // Backward pass and optimizer step
-            let grads = total_loss.backward();
-            let grads = GradientsParams::from_grads(grads, &self.network);
-            self.network = self.optimizer.step(
-                self.config.learning_rate,
-                self.network.clone(),
-                grads,
-            );
+            // Backward pass and optimizer step (skip if loss is non-finite to avoid corrupting weights)
+            if last_loss.is_finite() {
+                let grads = total_loss.backward();
+                let grads = GradientsParams::from_grads(grads, &self.network);
+                self.network = self.optimizer.step(
+                    self.config.learning_rate,
+                    self.network.clone(),
+                    grads,
+                );
+            }
         }
 
         (last_loss, last_entropy)
@@ -487,6 +489,12 @@ fn masked_softmax(logits: &[f32], legal: &[usize]) -> Vec<f32> {
         .iter()
         .copied()
         .fold(f32::NEG_INFINITY, f32::max);
+
+    // Guard against NaN logits: fall back to uniform over legal actions
+    if !max_val.is_finite() {
+        return uniform_over_legal(logits.len(), legal);
+    }
+
     let mut probs = vec![0.0f32; logits.len()];
     let mut sum = 0.0f32;
     for (i, &m) in masked.iter().enumerate() {
@@ -494,10 +502,25 @@ fn masked_softmax(logits: &[f32], legal: &[usize]) -> Vec<f32> {
         probs[i] = v;
         sum += v;
     }
+
+    if !sum.is_finite() || sum == 0.0 {
+        return uniform_over_legal(logits.len(), legal);
+    }
+
     for p in &mut probs {
         *p /= sum;
     }
 
+    probs
+}
+
+/// Return a uniform probability distribution over legal actions.
+fn uniform_over_legal(n: usize, legal: &[usize]) -> Vec<f32> {
+    let mut probs = vec![0.0f32; n];
+    let p = 1.0 / legal.len() as f32;
+    for &col in legal {
+        probs[col] = p;
+    }
     probs
 }
 
@@ -512,7 +535,8 @@ fn masked_log_softmax(logits: &[f32], legal: &[usize]) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// Sample an action from a categorical distribution defined by probs.
-fn sample_categorical(probs: &[f32], rng: &mut StdRng) -> usize {
+/// Falls back to a random legal action if sampling fails (e.g. NaN probs).
+fn sample_categorical(probs: &[f32], legal: &[usize], rng: &mut StdRng) -> usize {
     let r: f32 = rng.random_range(0.0..1.0);
     let mut cumulative = 0.0;
     for (i, &p) in probs.iter().enumerate() {
@@ -521,11 +545,8 @@ fn sample_categorical(probs: &[f32], rng: &mut StdRng) -> usize {
             return i;
         }
     }
-    // Fallback to last non-zero probability action
-    probs
-        .iter()
-        .rposition(|&p| p > 0.0)
-        .unwrap_or(0)
+    // Fallback to random legal action (guards against NaN probs)
+    legal[rng.random_range(0..legal.len())]
 }
 
 #[cfg(test)]

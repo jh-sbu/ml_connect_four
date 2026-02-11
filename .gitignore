@@ -3,3 +3,4 @@ CLAUDE.md
 agent_plans/
 checkpoints/
 pg_checkpoints/
+agent_configs/
