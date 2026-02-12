@@ -20,7 +20,7 @@ pub fn render(
             Constraint::Length(3), // Header
             Constraint::Min(15),  // Board
             Constraint::Length(3), // Message
-            Constraint::Length(3), // Controls
+            Constraint::Length(4), // Controls
         ])
         .split(frame.area());
 
@@ -139,15 +139,21 @@ fn render_message(frame: &mut Frame, message: &Option<String>, area: ratatui::la
 }
 
 fn render_controls(frame: &mut Frame, area: ratatui::layout::Rect) {
-    let controls = Paragraph::new(
-        "←/→: Move  |  Enter/Space: Drop  |  R: Restart  |  A: Random AI  |  D: DQN AI  |  G: PG AI  |  Q: Quit",
-    )
-    .alignment(Alignment::Center)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Controls"),
-    );
+    let line1 = Line::from("←/→: Move  |  Enter: Drop  |  R: Restart  |  Q: Quit");
+    let line2 = Line::from(vec![
+        Span::styled("Yellow", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw(": a Random  d DQN  g PG   "),
+        Span::styled("Red", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::raw(": A Random  D DQN  G PG"),
+    ]);
+
+    let controls = Paragraph::new(vec![line1, line2])
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Controls"),
+        );
 
     frame.render_widget(controls, area);
 }

@@ -58,8 +58,16 @@ impl App {
             }
 
             if self.ai_move_pending && !self.game_state.is_terminal() {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                self.do_ai_move();
+                // Poll instead of sleep so user can quit/restart during AI-vs-AI
+                if event::poll(std::time::Duration::from_millis(300))? {
+                    if let Event::Key(key) = event::read()? {
+                        self.handle_key(key);
+                    }
+                }
+                // Re-check: key handler may have reset ai_move_pending or quit
+                if self.ai_move_pending && !self.game_state.is_terminal() {
+                    self.do_ai_move();
+                }
                 continue;
             }
 
@@ -132,7 +140,7 @@ impl App {
         self.message = None;
 
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                 self.should_quit = true;
             }
             KeyCode::Left => {
@@ -148,7 +156,7 @@ impl App {
             KeyCode::Enter | KeyCode::Char(' ') => {
                 self.drop_piece();
             }
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.game_state = GameState::initial();
                 self.selected_column = 3;
                 self.ai_move_pending = false;
@@ -159,114 +167,116 @@ impl App {
                     self.ai_move_pending = true;
                 }
             }
-            KeyCode::Char('a') => {
-                self.toggle_ai();
-            }
-            KeyCode::Char('d') => {
-                self.toggle_dqn();
-            }
-            KeyCode::Char('g') => {
-                self.toggle_pg();
-            }
+            // Yellow player toggles (lowercase)
+            KeyCode::Char('a') => self.toggle_random_for(Player::Yellow),
+            KeyCode::Char('d') => self.toggle_dqn_for(Player::Yellow),
+            KeyCode::Char('g') => self.toggle_pg_for(Player::Yellow),
+            // Red player toggles (uppercase / Shift)
+            KeyCode::Char('A') => self.toggle_random_for(Player::Red),
+            KeyCode::Char('D') => self.toggle_dqn_for(Player::Red),
+            KeyCode::Char('G') => self.toggle_pg_for(Player::Red),
             _ => {}
         }
     }
 
-    fn toggle_ai(&mut self) {
-        self.yellow_player = match self.yellow_player {
-            PlayerKind::Human => PlayerKind::Ai(Box::new(RandomAgent::new())),
-            PlayerKind::Ai(_) => PlayerKind::Human,
-        };
+    fn player_slot(&self, target: Player) -> &PlayerKind {
+        match target {
+            Player::Red => &self.red_player,
+            Player::Yellow => &self.yellow_player,
+        }
+    }
 
-        // Reset game on toggle
+    fn set_player_slot(&mut self, target: Player, kind: PlayerKind) {
+        match target {
+            Player::Red => self.red_player = kind,
+            Player::Yellow => self.yellow_player = kind,
+        }
+    }
+
+    fn reset_game_after_toggle(&mut self) {
         self.game_state = GameState::initial();
         self.selected_column = 3;
         self.ai_move_pending = false;
 
-        let mode = self.game_mode_label();
-        self.message = Some(format!("Mode: {} — New game started!", mode));
+        // Append mode label if no load message was set
+        if self.message.is_none() {
+            let mode = self.game_mode_label();
+            self.message = Some(format!("Mode: {} — New game started!", mode));
+        } else {
+            let mode = self.game_mode_label();
+            let existing = self.message.take().unwrap();
+            self.message = Some(format!("{} — Mode: {}", existing, mode));
+        }
 
+        // If Red is AI, it goes first
         if self.is_current_player_ai() {
             self.ai_move_pending = true;
         }
     }
 
-    fn toggle_dqn(&mut self) {
-        self.yellow_player = match self.yellow_player {
-            PlayerKind::Human => {
-                let mut agent = DqnAgent::new(DqnConfig::default());
-                agent.set_epsilon(0.0);
-
-                let manager = CheckpointManager::new(CheckpointManagerConfig::default());
-                let load_msg = match manager.load_latest() {
-                    Ok(data) => {
-                        match agent.load_from_dir(&data.path) {
-                            Ok(()) => format!("DQN loaded (episode {})", data.metadata.episode),
-                            Err(_) => "DQN (failed to load checkpoint)".to_string(),
-                        }
-                    }
-                    Err(_) => "DQN (untrained, no checkpoint)".to_string(),
-                };
-                self.message = Some(load_msg);
-                PlayerKind::Ai(Box::new(agent))
-            }
-            PlayerKind::Ai(_) => PlayerKind::Human,
+    fn toggle_random_for(&mut self, target: Player) {
+        let is_ai = matches!(self.player_slot(target), PlayerKind::Ai(_));
+        let new_kind = if is_ai {
+            PlayerKind::Human
+        } else {
+            PlayerKind::Ai(Box::new(RandomAgent::new()))
         };
-
-        self.game_state = GameState::initial();
-        self.selected_column = 3;
-        self.ai_move_pending = false;
-
-        if matches!(self.yellow_player, PlayerKind::Human) {
-            let mode = self.game_mode_label();
-            self.message = Some(format!("Mode: {} — New game started!", mode));
-        }
-
-        if self.is_current_player_ai() {
-            self.ai_move_pending = true;
-        }
+        self.set_player_slot(target, new_kind);
+        self.reset_game_after_toggle();
     }
 
-    fn toggle_pg(&mut self) {
-        self.yellow_player = match self.yellow_player {
-            PlayerKind::Human => {
-                let agent = PolicyGradientAgent::new(PgConfig::default());
+    fn toggle_dqn_for(&mut self, target: Player) {
+        let is_ai = matches!(self.player_slot(target), PlayerKind::Ai(_));
+        let new_kind = if is_ai {
+            PlayerKind::Human
+        } else {
+            let mut agent = DqnAgent::new(DqnConfig::default());
+            agent.set_epsilon(0.0);
 
-                let manager = CheckpointManager::new(CheckpointManagerConfig {
-                    checkpoint_dir: std::path::PathBuf::from("pg_checkpoints"),
-                    ..Default::default()
-                });
-                let (boxed_agent, load_msg) = match manager.load_pg_latest() {
-                    Ok(data) => {
-                        let mut a = agent;
-                        match a.load_from_dir(&data.path) {
-                            Ok(()) => {
-                                let msg = format!("PG loaded (episode {})", data.metadata.episode);
-                                (a, msg)
-                            }
-                            Err(_) => (a, "PG (failed to load checkpoint)".to_string()),
-                        }
-                    }
-                    Err(_) => (agent, "PG (untrained, no checkpoint)".to_string()),
-                };
-                self.message = Some(load_msg);
-                PlayerKind::Ai(Box::new(boxed_agent))
-            }
-            PlayerKind::Ai(_) => PlayerKind::Human,
+            let manager = CheckpointManager::new(CheckpointManagerConfig::default());
+            let load_msg = match manager.load_latest() {
+                Ok(data) => match agent.load_from_dir(&data.path) {
+                    Ok(()) => format!("DQN loaded (episode {})", data.metadata.episode),
+                    Err(_) => "DQN (failed to load checkpoint)".to_string(),
+                },
+                Err(_) => "DQN (untrained, no checkpoint)".to_string(),
+            };
+            self.message = Some(load_msg);
+            PlayerKind::Ai(Box::new(agent))
         };
+        self.set_player_slot(target, new_kind);
+        self.reset_game_after_toggle();
+    }
 
-        self.game_state = GameState::initial();
-        self.selected_column = 3;
-        self.ai_move_pending = false;
+    fn toggle_pg_for(&mut self, target: Player) {
+        let is_ai = matches!(self.player_slot(target), PlayerKind::Ai(_));
+        let new_kind = if is_ai {
+            PlayerKind::Human
+        } else {
+            let agent = PolicyGradientAgent::new(PgConfig::default());
 
-        if matches!(self.yellow_player, PlayerKind::Human) {
-            let mode = self.game_mode_label();
-            self.message = Some(format!("Mode: {} — New game started!", mode));
-        }
-
-        if self.is_current_player_ai() {
-            self.ai_move_pending = true;
-        }
+            let manager = CheckpointManager::new(CheckpointManagerConfig {
+                checkpoint_dir: std::path::PathBuf::from("pg_checkpoints"),
+                ..Default::default()
+            });
+            let (boxed_agent, load_msg) = match manager.load_pg_latest() {
+                Ok(data) => {
+                    let mut a = agent;
+                    match a.load_from_dir(&data.path) {
+                        Ok(()) => {
+                            let msg = format!("PG loaded (episode {})", data.metadata.episode);
+                            (a, msg)
+                        }
+                        Err(_) => (a, "PG (failed to load checkpoint)".to_string()),
+                    }
+                }
+                Err(_) => (agent, "PG (untrained, no checkpoint)".to_string()),
+            };
+            self.message = Some(load_msg);
+            PlayerKind::Ai(Box::new(boxed_agent))
+        };
+        self.set_player_slot(target, new_kind);
+        self.reset_game_after_toggle();
     }
 
     /// Drop piece in selected column
@@ -328,5 +338,118 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_random_yellow_sets_ai_and_toggles_back() {
+        let mut app = App::new();
+        assert!(matches!(app.yellow_player, PlayerKind::Human));
+
+        app.toggle_random_for(Player::Yellow);
+        assert!(matches!(app.yellow_player, PlayerKind::Ai(_)));
+        assert_eq!(app.yellow_player.label(), "Random");
+
+        app.toggle_random_for(Player::Yellow);
+        assert!(matches!(app.yellow_player, PlayerKind::Human));
+    }
+
+    #[test]
+    fn toggle_random_red_sets_ai_and_toggles_back() {
+        let mut app = App::new();
+        assert!(matches!(app.red_player, PlayerKind::Human));
+
+        app.toggle_random_for(Player::Red);
+        assert!(matches!(app.red_player, PlayerKind::Ai(_)));
+        assert_eq!(app.red_player.label(), "Random");
+
+        app.toggle_random_for(Player::Red);
+        assert!(matches!(app.red_player, PlayerKind::Human));
+    }
+
+    #[test]
+    fn ai_vs_ai_mode_label() {
+        let mut app = App::new();
+        app.toggle_random_for(Player::Red);
+        app.toggle_random_for(Player::Yellow);
+        assert_eq!(app.game_mode_label(), "Random vs Random");
+    }
+
+    #[test]
+    fn ai_move_pending_when_red_is_ai() {
+        let mut app = App::new();
+        // Red goes first, so toggling Red to AI should set ai_move_pending
+        app.toggle_random_for(Player::Red);
+        assert!(app.ai_move_pending);
+    }
+
+    #[test]
+    fn ai_move_not_pending_when_only_yellow_is_ai() {
+        let mut app = App::new();
+        // Yellow goes second, Red (Human) goes first
+        app.toggle_random_for(Player::Yellow);
+        assert!(!app.ai_move_pending);
+    }
+
+    #[test]
+    fn game_resets_on_toggle() {
+        let mut app = App::new();
+        // Make a move, then toggle — game should reset
+        app.game_state.apply_move_mut(3).unwrap();
+        assert_eq!(app.game_state.current_player(), Player::Yellow);
+
+        app.toggle_random_for(Player::Yellow);
+        // Game reset: current player back to Red
+        assert_eq!(app.game_state.current_player(), Player::Red);
+        assert_eq!(app.selected_column, 3);
+    }
+
+    #[test]
+    fn is_current_player_ai_checks_both_players() {
+        let mut app = App::new();
+        // Initially Red's turn, no AI
+        assert!(!app.is_current_player_ai());
+
+        // Set Red to AI
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        assert!(app.is_current_player_ai());
+
+        // Make a move so it's Yellow's turn
+        app.game_state.apply_move_mut(0).unwrap();
+        assert!(!app.is_current_player_ai());
+
+        // Set Yellow to AI
+        app.yellow_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        assert!(app.is_current_player_ai());
+    }
+
+    #[test]
+    fn toggle_preserves_other_player() {
+        let mut app = App::new();
+        app.toggle_random_for(Player::Red);
+        assert!(matches!(app.red_player, PlayerKind::Ai(_)));
+        assert!(matches!(app.yellow_player, PlayerKind::Human));
+
+        app.toggle_random_for(Player::Yellow);
+        // Both should be AI now
+        assert!(matches!(app.red_player, PlayerKind::Ai(_)));
+        assert!(matches!(app.yellow_player, PlayerKind::Ai(_)));
+    }
+
+    #[test]
+    fn mode_label_human_vs_human() {
+        let app = App::new();
+        assert_eq!(app.game_mode_label(), "Human vs Human");
+    }
+
+    #[test]
+    fn mode_label_mixed() {
+        let mut app = App::new();
+        app.toggle_random_for(Player::Red);
+        assert_eq!(app.game_mode_label(), "Random vs Human");
     }
 }
