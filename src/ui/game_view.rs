@@ -13,27 +13,33 @@ pub fn render(
     selected_column: usize,
     message: &Option<String>,
     game_mode: &str,
+    is_ai_vs_ai: bool,
+    paused: bool,
 ) {
+    let is_terminal = game_state.is_terminal();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(15),  // Board
             Constraint::Length(3), // Message
-            Constraint::Length(4), // Controls
+            Constraint::Length(5), // Controls
         ])
         .split(frame.area());
 
-    render_header(frame, game_state, game_mode, chunks[0]);
+    render_header(frame, game_state, game_mode, is_ai_vs_ai, paused, is_terminal, chunks[0]);
     render_board(frame, game_state.board(), selected_column, chunks[1]);
     render_message(frame, message, chunks[2]);
-    render_controls(frame, chunks[3]);
+    render_controls(frame, is_ai_vs_ai, paused, is_terminal, chunks[3]);
 }
 
 fn render_header(
     frame: &mut Frame,
     game_state: &GameState,
     game_mode: &str,
+    is_ai_vs_ai: bool,
+    paused: bool,
+    is_terminal: bool,
     area: ratatui::layout::Rect,
 ) {
     let current_player = game_state.current_player();
@@ -42,8 +48,10 @@ fn render_header(
         Player::Yellow => ("Yellow", Color::Yellow),
     };
 
-    let status = if game_state.is_terminal() {
+    let status = if is_terminal {
         format!("Game Over  |  {}", game_mode)
+    } else if is_ai_vs_ai && paused {
+        format!("Current Player: {}  |  {}  [PAUSED]", player_name, game_mode)
     } else {
         format!("Current Player: {}  |  {}", player_name, game_mode)
     };
@@ -138,7 +146,13 @@ fn render_message(frame: &mut Frame, message: &Option<String>, area: ratatui::la
     frame.render_widget(msg_widget, area);
 }
 
-fn render_controls(frame: &mut Frame, area: ratatui::layout::Rect) {
+fn render_controls(
+    frame: &mut Frame,
+    is_ai_vs_ai: bool,
+    paused: bool,
+    is_terminal: bool,
+    area: ratatui::layout::Rect,
+) {
     let line1 = Line::from("←/→: Move  |  Enter: Drop  |  R: Restart  |  Q: Quit");
     let line2 = Line::from(vec![
         Span::styled("Yellow", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
@@ -147,7 +161,21 @@ fn render_controls(frame: &mut Frame, area: ratatui::layout::Rect) {
         Span::raw(": A Random  D DQN  G PG"),
     ]);
 
-    let controls = Paragraph::new(vec![line1, line2])
+    let dimmed = Style::default().fg(Color::DarkGray);
+    let active = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
+    let applicable = is_ai_vs_ai && !is_terminal;
+
+    let pause_style = if applicable { active } else { dimmed };
+    let step_style = if applicable && paused { active } else { dimmed };
+    let pause_label = if paused && applicable { "Resume" } else { "Pause" };
+
+    let line3 = Line::from(vec![
+        Span::styled(format!("Space: {}", pause_label), pause_style),
+        Span::styled("  |  ", if applicable { Style::default() } else { dimmed }),
+        Span::styled("N: Step", step_style),
+    ]);
+
+    let controls = Paragraph::new(vec![line1, line2, line3])
         .alignment(Alignment::Center)
         .block(
             Block::default()

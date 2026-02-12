@@ -28,6 +28,7 @@ pub struct App {
     red_player: PlayerKind,
     yellow_player: PlayerKind,
     ai_move_pending: bool,
+    paused: bool,
 }
 
 impl App {
@@ -40,7 +41,13 @@ impl App {
             red_player: PlayerKind::Human,
             yellow_player: PlayerKind::Human,
             ai_move_pending: false,
+            paused: false,
         }
+    }
+
+    fn is_ai_vs_ai(&self) -> bool {
+        matches!(self.red_player, PlayerKind::Ai(_))
+            && matches!(self.yellow_player, PlayerKind::Ai(_))
     }
 
     /// Main application loop
@@ -65,7 +72,7 @@ impl App {
                     }
                 }
                 // Re-check: key handler may have reset ai_move_pending or quit
-                if self.ai_move_pending && !self.game_state.is_terminal() {
+                if self.ai_move_pending && !self.game_state.is_terminal() && !self.paused {
                     self.do_ai_move();
                 }
                 continue;
@@ -153,13 +160,38 @@ impl App {
                     self.selected_column += 1;
                 }
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Enter => {
                 self.drop_piece();
+            }
+            KeyCode::Char(' ') => {
+                if self.is_ai_vs_ai() && !self.game_state.is_terminal() {
+                    self.paused = !self.paused;
+                    self.message = Some(if self.paused {
+                        "Paused — Space to resume, N to step".to_string()
+                    } else {
+                        "Resumed".to_string()
+                    });
+                } else {
+                    self.drop_piece();
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if self.is_ai_vs_ai()
+                    && self.paused
+                    && self.ai_move_pending
+                    && !self.game_state.is_terminal()
+                {
+                    self.do_ai_move();
+                    if !self.game_state.is_terminal() {
+                        self.message = Some("Stepped".to_string());
+                    }
+                }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.game_state = GameState::initial();
                 self.selected_column = 3;
                 self.ai_move_pending = false;
+                self.paused = false;
                 self.message = Some("New game started!".to_string());
 
                 // If Red is AI, trigger its move
@@ -197,6 +229,7 @@ impl App {
         self.game_state = GameState::initial();
         self.selected_column = 3;
         self.ai_move_pending = false;
+        self.paused = false;
 
         // Append mode label if no load message was set
         if self.message.is_none() {
@@ -331,6 +364,8 @@ impl App {
             self.selected_column,
             &self.message,
             &mode,
+            self.is_ai_vs_ai(),
+            self.paused,
         );
     }
 }
@@ -451,5 +486,107 @@ mod tests {
         let mut app = App::new();
         app.toggle_random_for(Player::Red);
         assert_eq!(app.game_mode_label(), "Random vs Human");
+    }
+
+    #[test]
+    fn is_ai_vs_ai_detection() {
+        let mut app = App::new();
+        // Human vs Human
+        assert!(!app.is_ai_vs_ai());
+
+        // AI vs Human
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        assert!(!app.is_ai_vs_ai());
+
+        // Human vs AI
+        app.red_player = PlayerKind::Human;
+        app.yellow_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        assert!(!app.is_ai_vs_ai());
+
+        // AI vs AI
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        assert!(app.is_ai_vs_ai());
+    }
+
+    #[test]
+    fn space_toggles_pause_in_ai_vs_ai() {
+        let mut app = App::new();
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.yellow_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        assert!(!app.paused);
+
+        // Space toggles pause on
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(app.paused);
+
+        // Space toggles pause off
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(!app.paused);
+    }
+
+    #[test]
+    fn space_drops_piece_when_human() {
+        let mut app = App::new();
+        assert_eq!(app.game_state.current_player(), Player::Red);
+        app.selected_column = 3;
+
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        // Piece should have been dropped, turn advances to Yellow
+        assert_eq!(app.game_state.current_player(), Player::Yellow);
+        assert!(!app.paused);
+    }
+
+    #[test]
+    fn step_advances_one_move_when_paused() {
+        let mut app = App::new();
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.yellow_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.ai_move_pending = true;
+        app.paused = true;
+
+        let state_before = app.game_state.clone();
+        app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+
+        // Game state should have changed (a move was made)
+        assert_ne!(state_before.board(), app.game_state.board());
+        // Should still be paused
+        assert!(app.paused);
+    }
+
+    #[test]
+    fn step_ignored_when_not_paused() {
+        let mut app = App::new();
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.yellow_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.ai_move_pending = true;
+        app.paused = false;
+
+        let state_before = app.game_state.clone();
+        app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+
+        // Game state should NOT have changed
+        assert_eq!(state_before.board(), app.game_state.board());
+    }
+
+    #[test]
+    fn restart_resets_pause() {
+        let mut app = App::new();
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.yellow_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.paused = true;
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        assert!(!app.paused);
+    }
+
+    #[test]
+    fn toggle_resets_pause() {
+        let mut app = App::new();
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.yellow_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        app.paused = true;
+
+        app.toggle_random_for(Player::Yellow);
+        assert!(!app.paused);
     }
 }
