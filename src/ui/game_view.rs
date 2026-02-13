@@ -1,11 +1,18 @@
 use crate::game::{Board, Cell, GameState, Player};
+use crate::ui::app::PlayerType;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+
+pub struct MenuRenderState {
+    pub target: Player,
+    pub cursor: usize,
+    pub current_type: PlayerType,
+}
 
 pub fn render(
     frame: &mut Frame,
@@ -15,6 +22,7 @@ pub fn render(
     game_mode: &str,
     is_ai_vs_ai: bool,
     paused: bool,
+    menu_state: Option<MenuRenderState>,
 ) {
     let is_terminal = game_state.is_terminal();
     let chunks = Layout::default()
@@ -31,6 +39,10 @@ pub fn render(
     render_board(frame, game_state.board(), selected_column, chunks[1]);
     render_message(frame, message, chunks[2]);
     render_controls(frame, is_ai_vs_ai, paused, is_terminal, chunks[3]);
+
+    if let Some(menu) = menu_state {
+        render_player_menu(frame, &menu);
+    }
 }
 
 fn render_header(
@@ -155,10 +167,11 @@ fn render_controls(
 ) {
     let line1 = Line::from("←/→: Move  |  Enter: Drop  |  R: Restart  |  Q: Quit");
     let line2 = Line::from(vec![
-        Span::styled("Yellow", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw(": a Random  d DQN  g PG   "),
+        Span::raw("1: "),
         Span::styled("Red", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Span::raw(": A Random  D DQN  G PG"),
+        Span::raw(" Player  |  2: "),
+        Span::styled("Yellow", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw(" Player"),
     ]);
 
     let dimmed = Style::default().fg(Color::DarkGray);
@@ -184,4 +197,61 @@ fn render_controls(
         );
 
     frame.render_widget(controls, area);
+}
+
+fn render_player_menu(frame: &mut Frame, menu: &MenuRenderState) {
+    let area = frame.area();
+    let width = 36u16;
+    let height = 10u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup_area = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    frame.render_widget(Clear, popup_area);
+
+    let (target_name, title_color) = match menu.target {
+        Player::Red => ("Red", Color::Red),
+        Player::Yellow => ("Yellow", Color::Yellow),
+    };
+
+    let title = format!("Select {} Player", target_name);
+
+    let mut lines = Vec::new();
+    for (i, pt) in PlayerType::ALL.iter().enumerate() {
+        let cursor_indicator = if i == menu.cursor { "> " } else { "  " };
+        let current_marker = if *pt == menu.current_type {
+            " *"
+        } else {
+            ""
+        };
+
+        let style = if i == menu.cursor {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else if *pt == menu.current_type {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!("{}{}{}", cursor_indicator, pt.label(), current_marker),
+            style,
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "↑/↓: Navigate  Enter: Select  Esc: Cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let menu_widget = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_style(Style::default().fg(title_color).add_modifier(Modifier::BOLD)),
+        );
+
+    frame.render_widget(menu_widget, popup_area);
 }

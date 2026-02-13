@@ -6,6 +6,33 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::{backend::Backend, Terminal};
 use std::io;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerType {
+    Human,
+    RandomAi,
+    DqnAi,
+    PgAi,
+}
+
+impl PlayerType {
+    pub const ALL: [PlayerType; 4] = [Self::Human, Self::RandomAi, Self::DqnAi, Self::PgAi];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Human => "Human",
+            Self::RandomAi => "Random AI",
+            Self::DqnAi => "DQN AI",
+            Self::PgAi => "Policy Gradient AI",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppMode {
+    Playing,
+    SelectingPlayer { target: Player, cursor: usize },
+}
+
 pub enum PlayerKind {
     Human,
     Ai(Box<dyn Agent>),
@@ -29,6 +56,7 @@ pub struct App {
     yellow_player: PlayerKind,
     ai_move_pending: bool,
     paused: bool,
+    mode: AppMode,
 }
 
 impl App {
@@ -42,6 +70,7 @@ impl App {
             yellow_player: PlayerKind::Human,
             ai_move_pending: false,
             paused: false,
+            mode: AppMode::Playing,
         }
     }
 
@@ -64,7 +93,10 @@ impl App {
                 break;
             }
 
-            if self.ai_move_pending && !self.game_state.is_terminal() {
+            if self.ai_move_pending
+                && !self.game_state.is_terminal()
+                && matches!(self.mode, AppMode::Playing)
+            {
                 // Poll instead of sleep so user can quit/restart during AI-vs-AI
                 if event::poll(std::time::Duration::from_millis(300))? {
                     if let Event::Key(key) = event::read()? {
@@ -142,8 +174,15 @@ impl App {
         }
     }
 
-    /// Handle key press
+    /// Handle key press — routes by current mode
     fn handle_key(&mut self, key: KeyEvent) {
+        match self.mode {
+            AppMode::Playing => self.handle_key_playing(key),
+            AppMode::SelectingPlayer { .. } => self.handle_key_menu(key),
+        }
+    }
+
+    fn handle_key_playing(&mut self, key: KeyEvent) {
         self.message = None;
 
         match key.code {
@@ -199,16 +238,121 @@ impl App {
                     self.ai_move_pending = true;
                 }
             }
-            // Yellow player toggles (lowercase)
-            KeyCode::Char('a') => self.toggle_random_for(Player::Yellow),
-            KeyCode::Char('d') => self.toggle_dqn_for(Player::Yellow),
-            KeyCode::Char('g') => self.toggle_pg_for(Player::Yellow),
-            // Red player toggles (uppercase / Shift)
-            KeyCode::Char('A') => self.toggle_random_for(Player::Red),
-            KeyCode::Char('D') => self.toggle_dqn_for(Player::Red),
-            KeyCode::Char('G') => self.toggle_pg_for(Player::Red),
+            KeyCode::Char('1') => self.open_player_menu(Player::Red),
+            KeyCode::Char('2') => self.open_player_menu(Player::Yellow),
             _ => {}
         }
+    }
+
+    fn handle_key_menu(&mut self, key: KeyEvent) {
+        let AppMode::SelectingPlayer { target, cursor } = self.mode else {
+            return;
+        };
+
+        match key.code {
+            KeyCode::Up => {
+                if cursor > 0 {
+                    self.mode = AppMode::SelectingPlayer {
+                        target,
+                        cursor: cursor - 1,
+                    };
+                }
+            }
+            KeyCode::Down => {
+                if cursor < PlayerType::ALL.len() - 1 {
+                    self.mode = AppMode::SelectingPlayer {
+                        target,
+                        cursor: cursor + 1,
+                    };
+                }
+            }
+            KeyCode::Enter => {
+                let selected = PlayerType::ALL[cursor];
+                self.mode = AppMode::Playing;
+                self.set_player_type(target, selected);
+            }
+            KeyCode::Esc => {
+                self.mode = AppMode::Playing;
+            }
+            _ => {}
+        }
+    }
+
+    fn current_player_type(&self, target: Player) -> PlayerType {
+        match self.player_slot(target) {
+            PlayerKind::Human => PlayerType::Human,
+            PlayerKind::Ai(agent) => match agent.name() {
+                "Random" => PlayerType::RandomAi,
+                "DQN" => PlayerType::DqnAi,
+                "PG" => PlayerType::PgAi,
+                _ => PlayerType::Human,
+            },
+        }
+    }
+
+    fn open_player_menu(&mut self, target: Player) {
+        let current = self.current_player_type(target);
+        let cursor = PlayerType::ALL
+            .iter()
+            .position(|&pt| pt == current)
+            .unwrap_or(0);
+        self.mode = AppMode::SelectingPlayer { target, cursor };
+    }
+
+    fn create_player_kind(&mut self, player_type: PlayerType) -> PlayerKind {
+        match player_type {
+            PlayerType::Human => PlayerKind::Human,
+            PlayerType::RandomAi => PlayerKind::Ai(Box::new(RandomAgent::new())),
+            PlayerType::DqnAi => {
+                let mut agent = DqnAgent::new(DqnConfig::default());
+                agent.set_epsilon(0.0);
+
+                let manager = CheckpointManager::new(CheckpointManagerConfig::default());
+                let load_msg = match manager.load_latest() {
+                    Ok(data) => match agent.load_from_dir(&data.path) {
+                        Ok(()) => format!("DQN loaded (episode {})", data.metadata.episode),
+                        Err(_) => "DQN (failed to load checkpoint)".to_string(),
+                    },
+                    Err(_) => "DQN (untrained, no checkpoint)".to_string(),
+                };
+                self.message = Some(load_msg);
+                PlayerKind::Ai(Box::new(agent))
+            }
+            PlayerType::PgAi => {
+                let agent = PolicyGradientAgent::new(PgConfig::default());
+
+                let manager = CheckpointManager::new(CheckpointManagerConfig {
+                    checkpoint_dir: std::path::PathBuf::from("pg_checkpoints"),
+                    ..Default::default()
+                });
+                let (boxed_agent, load_msg) = match manager.load_pg_latest() {
+                    Ok(data) => {
+                        let mut a = agent;
+                        match a.load_from_dir(&data.path) {
+                            Ok(()) => {
+                                let msg =
+                                    format!("PG loaded (episode {})", data.metadata.episode);
+                                (a, msg)
+                            }
+                            Err(_) => (a, "PG (failed to load checkpoint)".to_string()),
+                        }
+                    }
+                    Err(_) => (agent, "PG (untrained, no checkpoint)".to_string()),
+                };
+                self.message = Some(load_msg);
+                PlayerKind::Ai(Box::new(boxed_agent))
+            }
+        }
+    }
+
+    fn set_player_type(&mut self, target: Player, player_type: PlayerType) {
+        let current = self.current_player_type(target);
+        if current == player_type {
+            return;
+        }
+        let kind = self.create_player_kind(player_type);
+        self.set_player_slot(target, kind);
+        self.reset_game_after_toggle();
     }
 
     fn player_slot(&self, target: Player) -> &PlayerKind {
@@ -247,69 +391,34 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     fn toggle_random_for(&mut self, target: Player) {
         let is_ai = matches!(self.player_slot(target), PlayerKind::Ai(_));
-        let new_kind = if is_ai {
-            PlayerKind::Human
+        if is_ai {
+            self.set_player_type(target, PlayerType::Human);
         } else {
-            PlayerKind::Ai(Box::new(RandomAgent::new()))
-        };
-        self.set_player_slot(target, new_kind);
-        self.reset_game_after_toggle();
+            self.set_player_type(target, PlayerType::RandomAi);
+        }
     }
 
+    #[cfg(test)]
     fn toggle_dqn_for(&mut self, target: Player) {
         let is_ai = matches!(self.player_slot(target), PlayerKind::Ai(_));
-        let new_kind = if is_ai {
-            PlayerKind::Human
+        if is_ai {
+            self.set_player_type(target, PlayerType::Human);
         } else {
-            let mut agent = DqnAgent::new(DqnConfig::default());
-            agent.set_epsilon(0.0);
-
-            let manager = CheckpointManager::new(CheckpointManagerConfig::default());
-            let load_msg = match manager.load_latest() {
-                Ok(data) => match agent.load_from_dir(&data.path) {
-                    Ok(()) => format!("DQN loaded (episode {})", data.metadata.episode),
-                    Err(_) => "DQN (failed to load checkpoint)".to_string(),
-                },
-                Err(_) => "DQN (untrained, no checkpoint)".to_string(),
-            };
-            self.message = Some(load_msg);
-            PlayerKind::Ai(Box::new(agent))
-        };
-        self.set_player_slot(target, new_kind);
-        self.reset_game_after_toggle();
+            self.set_player_type(target, PlayerType::DqnAi);
+        }
     }
 
+    #[cfg(test)]
     fn toggle_pg_for(&mut self, target: Player) {
         let is_ai = matches!(self.player_slot(target), PlayerKind::Ai(_));
-        let new_kind = if is_ai {
-            PlayerKind::Human
+        if is_ai {
+            self.set_player_type(target, PlayerType::Human);
         } else {
-            let agent = PolicyGradientAgent::new(PgConfig::default());
-
-            let manager = CheckpointManager::new(CheckpointManagerConfig {
-                checkpoint_dir: std::path::PathBuf::from("pg_checkpoints"),
-                ..Default::default()
-            });
-            let (boxed_agent, load_msg) = match manager.load_pg_latest() {
-                Ok(data) => {
-                    let mut a = agent;
-                    match a.load_from_dir(&data.path) {
-                        Ok(()) => {
-                            let msg = format!("PG loaded (episode {})", data.metadata.episode);
-                            (a, msg)
-                        }
-                        Err(_) => (a, "PG (failed to load checkpoint)".to_string()),
-                    }
-                }
-                Err(_) => (agent, "PG (untrained, no checkpoint)".to_string()),
-            };
-            self.message = Some(load_msg);
-            PlayerKind::Ai(Box::new(boxed_agent))
-        };
-        self.set_player_slot(target, new_kind);
-        self.reset_game_after_toggle();
+            self.set_player_type(target, PlayerType::PgAi);
+        }
     }
 
     /// Drop piece in selected column
@@ -358,6 +467,16 @@ impl App {
     /// Render the UI
     fn render(&self, frame: &mut ratatui::Frame) {
         let mode = self.game_mode_label();
+        let menu_state = match self.mode {
+            AppMode::SelectingPlayer { target, cursor } => {
+                Some(super::game_view::MenuRenderState {
+                    target,
+                    cursor,
+                    current_type: self.current_player_type(target),
+                })
+            }
+            AppMode::Playing => None,
+        };
         super::game_view::render(
             frame,
             &self.game_state,
@@ -366,6 +485,7 @@ impl App {
             &mode,
             self.is_ai_vs_ai(),
             self.paused,
+            menu_state,
         );
     }
 }
@@ -588,5 +708,214 @@ mod tests {
 
         app.toggle_random_for(Player::Yellow);
         assert!(!app.paused);
+    }
+
+    // --- Player Selection Menu Tests ---
+
+    #[test]
+    fn open_player_menu_sets_selecting_mode() {
+        let mut app = App::new();
+        app.open_player_menu(Player::Red);
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer {
+                target: Player::Red,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn open_player_menu_preselects_current_type() {
+        let mut app = App::new();
+        // Default is Human, which is index 0
+        app.open_player_menu(Player::Yellow);
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 0, .. }
+        ));
+
+        // Set to Random AI, then open menu — cursor should be at index 1
+        app.mode = AppMode::Playing;
+        app.set_player_type(Player::Yellow, PlayerType::RandomAi);
+        app.open_player_menu(Player::Yellow);
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn menu_navigation_up_down() {
+        let mut app = App::new();
+        app.open_player_menu(Player::Red);
+        // Starts at cursor 0 (Human)
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 0, .. }
+        ));
+
+        // Down moves to 1
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 1, .. }
+        ));
+
+        // Down again moves to 2
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 2, .. }
+        ));
+
+        // Up goes back to 1
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn menu_cursor_clamps_at_bounds() {
+        let mut app = App::new();
+        app.open_player_menu(Player::Red);
+        // Cursor at 0, Up should stay at 0
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 0, .. }
+        ));
+
+        // Move to last item (index 3)
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 3, .. }
+        ));
+
+        // Down should stay at 3
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer { cursor: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn menu_esc_cancels_without_change() {
+        let mut app = App::new();
+        assert!(matches!(app.yellow_player, PlayerKind::Human));
+
+        app.open_player_menu(Player::Yellow);
+        // Move cursor to Random AI
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        // Cancel with Esc
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+
+        assert_eq!(app.mode, AppMode::Playing);
+        assert!(matches!(app.yellow_player, PlayerKind::Human));
+    }
+
+    #[test]
+    fn menu_enter_selects_random_ai() {
+        let mut app = App::new();
+        assert!(matches!(app.yellow_player, PlayerKind::Human));
+
+        app.open_player_menu(Player::Yellow);
+        // Move to Random AI (index 1)
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        // Select
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!(app.mode, AppMode::Playing);
+        assert!(matches!(app.yellow_player, PlayerKind::Ai(_)));
+        assert_eq!(app.yellow_player.label(), "Random");
+    }
+
+    #[test]
+    fn menu_select_same_type_is_noop() {
+        let mut app = App::new();
+        // Make a move so game state is not initial
+        app.game_state.apply_move_mut(3).unwrap();
+        let board_before = app.game_state.board().clone();
+
+        // Open menu for Yellow (Human) and select Human (same type)
+        app.open_player_menu(Player::Yellow);
+        app.handle_key(KeyEvent::from(KeyCode::Enter)); // cursor=0 = Human
+
+        assert_eq!(app.mode, AppMode::Playing);
+        // Board should NOT have been reset
+        assert_eq!(*app.game_state.board(), board_before);
+    }
+
+    #[test]
+    fn set_player_type_resets_game() {
+        let mut app = App::new();
+        // Make a move
+        app.game_state.apply_move_mut(3).unwrap();
+        assert_eq!(app.game_state.current_player(), Player::Yellow);
+
+        app.set_player_type(Player::Yellow, PlayerType::RandomAi);
+        // Game should have reset
+        assert_eq!(app.game_state.current_player(), Player::Red);
+    }
+
+    #[test]
+    fn hotkeys_1_and_2_open_menus() {
+        let mut app = App::new();
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer {
+                target: Player::Red,
+                ..
+            }
+        ));
+
+        // Cancel to return to Playing
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.mode, AppMode::Playing);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert!(matches!(
+            app.mode,
+            AppMode::SelectingPlayer {
+                target: Player::Yellow,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn game_keys_ignored_while_menu_open() {
+        let mut app = App::new();
+        app.selected_column = 3;
+        app.open_player_menu(Player::Red);
+
+        // Arrow keys should NOT move column while in menu
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        assert_eq!(app.selected_column, 3);
+
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        assert_eq!(app.selected_column, 3);
+
+        // Enter should NOT drop a piece — it selects the menu item
+        let player_before = app.game_state.current_player();
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.game_state.current_player(), player_before);
+    }
+
+    #[test]
+    fn current_player_type_maps_correctly() {
+        let mut app = App::new();
+        assert_eq!(app.current_player_type(Player::Red), PlayerType::Human);
+
+        app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
+        assert_eq!(app.current_player_type(Player::Red), PlayerType::RandomAi);
     }
 }
