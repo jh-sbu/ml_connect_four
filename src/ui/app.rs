@@ -1,5 +1,5 @@
 use crate::ai::algorithms::{DqnAgent, DqnConfig, PgConfig, PolicyGradientAgent};
-use crate::ai::{Agent, RandomAgent};
+use crate::ai::{Agent, NegamaxAgent, RandomAgent};
 use crate::checkpoint::{CheckpointManager, CheckpointManagerConfig};
 use crate::game::{GameOutcome, GameState, MoveError, Player};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
@@ -12,10 +12,17 @@ pub enum PlayerType {
     RandomAi,
     DqnAi,
     PgAi,
+    NegamaxAi,
 }
 
 impl PlayerType {
-    pub const ALL: [PlayerType; 4] = [Self::Human, Self::RandomAi, Self::DqnAi, Self::PgAi];
+    pub const ALL: [PlayerType; 5] = [
+        Self::Human,
+        Self::RandomAi,
+        Self::DqnAi,
+        Self::PgAi,
+        Self::NegamaxAi,
+    ];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -23,6 +30,7 @@ impl PlayerType {
             Self::RandomAi => "Random AI",
             Self::DqnAi => "DQN AI",
             Self::PgAi => "Policy Gradient AI",
+            Self::NegamaxAi => "Negamax AI",
         }
     }
 }
@@ -285,6 +293,7 @@ impl App {
                 "Random" => PlayerType::RandomAi,
                 "DQN" => PlayerType::DqnAi,
                 "PG" => PlayerType::PgAi,
+                "Negamax" => PlayerType::NegamaxAi,
                 _ => PlayerType::Human,
             },
         }
@@ -341,6 +350,10 @@ impl App {
                 };
                 self.message = Some(load_msg);
                 PlayerKind::Ai(Box::new(boxed_agent))
+            }
+            PlayerType::NegamaxAi => {
+                self.message = Some("Negamax AI (depth 7)".to_string());
+                PlayerKind::Ai(Box::new(NegamaxAgent::new(7)))
             }
         }
     }
@@ -788,20 +801,21 @@ mod tests {
             AppMode::SelectingPlayer { cursor: 0, .. }
         ));
 
-        // Move to last item (index 3)
+        // Move to last item (index 4)
+        app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         assert!(matches!(
             app.mode,
-            AppMode::SelectingPlayer { cursor: 3, .. }
+            AppMode::SelectingPlayer { cursor: 4, .. }
         ));
 
-        // Down should stay at 3
+        // Down should stay at 4
         app.handle_key(KeyEvent::from(KeyCode::Down));
         assert!(matches!(
             app.mode,
-            AppMode::SelectingPlayer { cursor: 3, .. }
+            AppMode::SelectingPlayer { cursor: 4, .. }
         ));
     }
 
@@ -917,5 +931,23 @@ mod tests {
 
         app.red_player = PlayerKind::Ai(Box::new(RandomAgent::new()));
         assert_eq!(app.current_player_type(Player::Red), PlayerType::RandomAi);
+    }
+
+    #[test]
+    fn player_type_all_contains_negamax() {
+        assert!(PlayerType::ALL.contains(&PlayerType::NegamaxAi));
+        assert_eq!(PlayerType::ALL.len(), 5);
+    }
+
+    #[test]
+    fn set_player_type_negamax_works() {
+        let mut app = App::new();
+        app.set_player_type(Player::Yellow, PlayerType::NegamaxAi);
+        assert!(matches!(app.yellow_player, PlayerKind::Ai(_)));
+        assert_eq!(app.yellow_player.label(), "Negamax");
+        assert_eq!(
+            app.current_player_type(Player::Yellow),
+            PlayerType::NegamaxAi
+        );
     }
 }
