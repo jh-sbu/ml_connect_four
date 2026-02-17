@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ai::algorithms::{DqnAgent, PolicyGradientAgent};
+use crate::ai::TrainableAgent;
 use crate::checkpoint::metadata::{
     CheckpointHyperparameters, CheckpointMetadata, CheckpointMetrics, DqnTrainingState,
     PgHyperparameters, PgTrainingState,
@@ -229,6 +230,48 @@ impl CheckpointManager {
                 max_grad_norm: training_state.max_grad_norm,
             }),
         };
+        let meta_json = serde_json::to_string_pretty(&metadata)?;
+        fs::write(tmp_dir.join("metadata.json"), meta_json)?;
+
+        // Atomic rename
+        if final_dir.exists() {
+            fs::remove_dir_all(&final_dir)?;
+        }
+        fs::rename(&tmp_dir, &final_dir)?;
+
+        self.update_latest_symlink(&dir_name)?;
+        self.prune_old_checkpoints()?;
+
+        Ok(final_dir)
+    }
+
+    /// Save a checkpoint using the unified TrainableAgent interface.
+    pub fn save_agent_checkpoint(
+        &self,
+        agent: &dyn TrainableAgent,
+        metrics: &CheckpointMetrics,
+        episode: usize,
+    ) -> Result<PathBuf, CheckpointError> {
+        let dir_name = format!("checkpoint_{:07}", episode);
+        let tmp_dir = self.config.checkpoint_dir.join(format!("{}.tmp", dir_name));
+        let final_dir = self.config.checkpoint_dir.join(&dir_name);
+
+        fs::create_dir_all(&tmp_dir)?;
+
+        // Save network weights via TrainableAgent
+        agent
+            .save_weights_to_dir(&tmp_dir)
+            .map_err(|e| CheckpointError::ModelSave(e.to_string()))?;
+
+        // Save training state JSON
+        fs::write(tmp_dir.join("training_state.json"), agent.training_state_json())?;
+
+        // Save metadata
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let metadata = agent.build_checkpoint_metadata(metrics, episode, timestamp);
         let meta_json = serde_json::to_string_pretty(&metadata)?;
         fs::write(tmp_dir.join("metadata.json"), meta_json)?;
 

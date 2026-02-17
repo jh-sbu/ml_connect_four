@@ -1,3 +1,6 @@
+use std::path::Path;
+
+use crate::checkpoint::{CheckpointMetadata, CheckpointMetrics};
 use crate::game::{GameState, Player};
 
 /// A single step of experience for RL training.
@@ -75,4 +78,41 @@ pub trait Agent {
     fn current_metrics(&self) -> AgentMetrics {
         AgentMetrics::default()
     }
+}
+
+/// Opaque eval state for enter/exit eval mode.
+pub enum EvalState {
+    Epsilon(f32),
+    NoOp,
+}
+
+/// Extension trait for agents that support the full training lifecycle.
+pub trait TrainableAgent: Agent {
+    /// Algorithm name for logging/dashboard ("DQN", "PG").
+    fn algorithm_name(&self) -> &str;
+    /// Current episode count (for resume offset).
+    fn episode_count(&self) -> usize;
+    /// Current training step count.
+    fn step_count(&self) -> usize;
+    /// Enter eval mode (e.g., set epsilon=0 for DQN). Returns state to restore.
+    fn enter_eval_mode(&mut self) -> EvalState;
+    /// Exit eval mode, restoring previous state.
+    fn exit_eval_mode(&mut self, state: EvalState);
+    /// Algorithm-specific metric value (epsilon for DQN, 0.0 for PG).
+    fn algorithm_metric_value(&self) -> f32;
+    /// Algorithm-specific metric label ("eps" for DQN, "entropy" for PG).
+    fn algorithm_metric_label(&self) -> &str;
+    /// Policy entropy, if applicable (PG only).
+    fn last_policy_entropy(&self) -> Option<f32>;
+    /// Save network weights to a directory.
+    fn save_weights_to_dir(&self, dir: &Path) -> Result<(), Box<dyn std::error::Error>>;
+    /// Serialize training state to JSON.
+    fn training_state_json(&self) -> String;
+    /// Build checkpoint metadata for this agent's algorithm.
+    fn build_checkpoint_metadata(
+        &self,
+        metrics: &CheckpointMetrics,
+        episode: usize,
+        timestamp: u64,
+    ) -> CheckpointMetadata;
 }

@@ -16,6 +16,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use ml_connect_four::ai::algorithms::{DqnAgent, PolicyGradientAgent};
+use ml_connect_four::ai::TrainableAgent;
 use ml_connect_four::checkpoint::{CheckpointManager, CheckpointManagerConfig};
 use ml_connect_four::config::AppConfig;
 use ml_connect_four::training::dashboard_msg::{TrainingCommand, TrainingUpdate};
@@ -123,7 +124,7 @@ fn run_dqn(resume: bool, headless: bool, config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    run_dashboard_dqn(agent, trainer_config, total_episodes)
+    run_dashboard(agent, trainer_config, total_episodes)
 }
 
 fn run_pg(resume: bool, headless: bool, config: &AppConfig) -> Result<()> {
@@ -156,18 +157,20 @@ fn run_pg(resume: bool, headless: bool, config: &AppConfig) -> Result<()> {
 
     if headless {
         let trainer = Trainer::new(trainer_config);
-        trainer.train_pg(&mut agent);
+        trainer.train(&mut agent);
         return Ok(());
     }
 
-    run_dashboard_pg(agent, trainer_config, total_episodes)
+    run_dashboard(agent, trainer_config, total_episodes)
 }
 
-fn run_dashboard_dqn(
-    agent: DqnAgent,
+fn run_dashboard<A: TrainableAgent + Send + 'static>(
+    agent: A,
     trainer_config: TrainerConfig,
     total_episodes: usize,
 ) -> Result<()> {
+    let algorithm = agent.algorithm_name().to_string();
+
     let (update_tx, update_rx) = mpsc::channel::<TrainingUpdate>();
     let (cmd_tx, cmd_rx) = mpsc::channel::<TrainingCommand>();
 
@@ -183,33 +186,7 @@ fn run_dashboard_dqn(
         trainer.train_with_dashboard(&mut agent, update_tx, cmd_rx, pause_clone, quit_clone);
     });
 
-    run_dashboard_ui(update_rx, cmd_tx, pause, quit, total_episodes, "DQN")?;
-
-    let _ = training_handle.join();
-    Ok(())
-}
-
-fn run_dashboard_pg(
-    agent: PolicyGradientAgent,
-    trainer_config: TrainerConfig,
-    total_episodes: usize,
-) -> Result<()> {
-    let (update_tx, update_rx) = mpsc::channel::<TrainingUpdate>();
-    let (cmd_tx, cmd_rx) = mpsc::channel::<TrainingCommand>();
-
-    let pause = Arc::new(AtomicBool::new(false));
-    let quit = Arc::new(AtomicBool::new(false));
-
-    let pause_clone = pause.clone();
-    let quit_clone = quit.clone();
-
-    let training_handle = std::thread::spawn(move || {
-        let mut agent = agent;
-        let trainer = Trainer::new(trainer_config);
-        trainer.train_pg_with_dashboard(&mut agent, update_tx, cmd_rx, pause_clone, quit_clone);
-    });
-
-    run_dashboard_ui(update_rx, cmd_tx, pause, quit, total_episodes, "PG")?;
+    run_dashboard_ui(update_rx, cmd_tx, pause, quit, total_episodes, &algorithm)?;
 
     let _ = training_handle.join();
     Ok(())

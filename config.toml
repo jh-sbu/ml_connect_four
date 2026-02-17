@@ -32,6 +32,7 @@
 # checkpoint_interval = 1000
 # checkpoint_dir = "checkpoints"
 # live_update_interval = 4
+# base_seed = 42
 
 # [checkpoint]
 # checkpoint_dir = "checkpoints"

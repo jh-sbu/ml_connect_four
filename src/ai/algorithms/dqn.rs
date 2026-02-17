@@ -12,7 +12,8 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::ai::agent::{Agent, AgentMetrics, Experience, UpdateMetrics};
+use crate::ai::agent::{Agent, AgentMetrics, EvalState, Experience, TrainableAgent, UpdateMetrics};
+use crate::checkpoint::{CheckpointHyperparameters, CheckpointMetadata};
 use crate::ai::networks::{DqnNetwork, DqnNetworkConfig};
 use crate::ai::state_encoding::{encode_state, encode_states_batch};
 use crate::checkpoint::DqnTrainingState;
@@ -350,6 +351,80 @@ impl Agent for DqnAgent {
         AgentMetrics {
             total_games: self.episode_count as u64,
             ..Default::default()
+        }
+    }
+}
+
+impl TrainableAgent for DqnAgent {
+    fn algorithm_name(&self) -> &str {
+        "DQN"
+    }
+
+    fn episode_count(&self) -> usize {
+        self.episode_count
+    }
+
+    fn step_count(&self) -> usize {
+        self.step_count
+    }
+
+    fn enter_eval_mode(&mut self) -> EvalState {
+        let saved = self.epsilon;
+        self.epsilon = 0.0;
+        EvalState::Epsilon(saved)
+    }
+
+    fn exit_eval_mode(&mut self, state: EvalState) {
+        if let EvalState::Epsilon(eps) = state {
+            self.epsilon = eps;
+        }
+    }
+
+    fn algorithm_metric_value(&self) -> f32 {
+        self.epsilon
+    }
+
+    fn algorithm_metric_label(&self) -> &str {
+        "eps"
+    }
+
+    fn last_policy_entropy(&self) -> Option<f32> {
+        None
+    }
+
+    fn save_weights_to_dir(&self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        self.save_to_dir(dir)
+    }
+
+    fn training_state_json(&self) -> String {
+        serde_json::to_string_pretty(&self.training_state()).expect("DQN training state serializes")
+    }
+
+    fn build_checkpoint_metadata(
+        &self,
+        metrics: &crate::checkpoint::CheckpointMetrics,
+        episode: usize,
+        timestamp: u64,
+    ) -> CheckpointMetadata {
+        let ts = self.training_state();
+        CheckpointMetadata {
+            episode,
+            timestamp,
+            algorithm: "DQN".to_string(),
+            metrics: metrics.clone(),
+            hyperparameters: CheckpointHyperparameters {
+                learning_rate: ts.learning_rate,
+                gamma: ts.gamma,
+                epsilon: ts.epsilon,
+                batch_size: ts.batch_size,
+                target_update_interval: ts.target_update_interval,
+                replay_capacity: ts.replay_capacity,
+                min_replay_size: ts.min_replay_size,
+                epsilon_start: ts.epsilon_start,
+                epsilon_end: ts.epsilon_end,
+                epsilon_decay_episodes: ts.epsilon_decay_episodes,
+            },
+            pg_hyperparameters: None,
         }
     }
 }

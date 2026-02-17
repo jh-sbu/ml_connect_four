@@ -13,7 +13,8 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::ai::agent::{Agent, AgentMetrics, Experience, UpdateMetrics};
+use crate::ai::agent::{Agent, AgentMetrics, EvalState, Experience, TrainableAgent, UpdateMetrics};
+use crate::checkpoint::{CheckpointHyperparameters, CheckpointMetadata, PgHyperparameters};
 use crate::ai::networks::{PolicyValueNetwork, PolicyValueNetworkConfig};
 use crate::ai::state_encoding::{encode_state, encode_states_batch};
 use crate::checkpoint::PgTrainingState;
@@ -60,6 +61,7 @@ pub struct PolicyGradientAgent {
     device: <TrainBackend as Backend>::Device,
     episode_count: usize,
     step_count: usize,
+    last_entropy: Option<f32>,
     rng: StdRng,
 }
 
@@ -79,6 +81,7 @@ impl PolicyGradientAgent {
             device,
             episode_count: 0,
             step_count: 0,
+            last_entropy: None,
             rng: StdRng::from_os_rng(),
         }
     }
@@ -463,13 +466,94 @@ impl Agent for PolicyGradientAgent {
 
     fn batch_update(&mut self, experiences: &[Experience]) -> UpdateMetrics {
         self.episode_count += 1;
-        self.ppo_update(experiences)
+        let metrics = self.ppo_update(experiences);
+        if let Some(ent) = metrics.policy_entropy {
+            self.last_entropy = Some(ent);
+        }
+        metrics
     }
 
     fn current_metrics(&self) -> AgentMetrics {
         AgentMetrics {
             total_games: self.episode_count as u64,
             ..Default::default()
+        }
+    }
+}
+
+impl TrainableAgent for PolicyGradientAgent {
+    fn algorithm_name(&self) -> &str {
+        "PG"
+    }
+
+    fn episode_count(&self) -> usize {
+        self.episode_count
+    }
+
+    fn step_count(&self) -> usize {
+        self.step_count
+    }
+
+    fn enter_eval_mode(&mut self) -> EvalState {
+        EvalState::NoOp
+    }
+
+    fn exit_eval_mode(&mut self, _state: EvalState) {}
+
+    fn algorithm_metric_value(&self) -> f32 {
+        0.0
+    }
+
+    fn algorithm_metric_label(&self) -> &str {
+        "entropy"
+    }
+
+    fn last_policy_entropy(&self) -> Option<f32> {
+        self.last_entropy
+    }
+
+    fn save_weights_to_dir(&self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        self.save_to_dir(dir)
+    }
+
+    fn training_state_json(&self) -> String {
+        serde_json::to_string_pretty(&self.training_state()).expect("PG training state serializes")
+    }
+
+    fn build_checkpoint_metadata(
+        &self,
+        metrics: &crate::checkpoint::CheckpointMetrics,
+        episode: usize,
+        timestamp: u64,
+    ) -> CheckpointMetadata {
+        let ts = self.training_state();
+        CheckpointMetadata {
+            episode,
+            timestamp,
+            algorithm: "PG".to_string(),
+            metrics: metrics.clone(),
+            hyperparameters: CheckpointHyperparameters {
+                learning_rate: ts.learning_rate,
+                gamma: ts.gamma,
+                epsilon: 0.0,
+                batch_size: 0,
+                target_update_interval: 0,
+                replay_capacity: 0,
+                min_replay_size: 0,
+                epsilon_start: 0.0,
+                epsilon_end: 0.0,
+                epsilon_decay_episodes: 0,
+            },
+            pg_hyperparameters: Some(PgHyperparameters {
+                learning_rate: ts.learning_rate,
+                gamma: ts.gamma,
+                gae_lambda: ts.gae_lambda,
+                ppo_epsilon: ts.ppo_epsilon,
+                entropy_coeff: ts.entropy_coeff,
+                value_coeff: ts.value_coeff,
+                ppo_epochs: ts.ppo_epochs,
+                max_grad_norm: ts.max_grad_norm,
+            }),
         }
     }
 }
