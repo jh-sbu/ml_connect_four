@@ -83,85 +83,70 @@ fn main() -> Result<()> {
         app_config.training.checkpoint_dir = PathBuf::from("pg_checkpoints");
     }
 
+    let trainer_config = app_config.training.clone();
+    let total_episodes = trainer_config.num_episodes;
+
     match cli.algorithm.as_str() {
-        "dqn" => run_dqn(cli.resume, cli.headless, &app_config),
-        "pg" => run_pg(cli.resume, cli.headless, &app_config),
+        "dqn" => {
+            let mut agent = DqnAgent::new(app_config.dqn.clone());
+            if cli.resume {
+                resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
+            }
+            if cli.headless {
+                let trainer = Trainer::new(trainer_config);
+                trainer.train(&mut agent);
+                Ok(())
+            } else {
+                run_dashboard(agent, trainer_config, total_episodes)
+            }
+        }
+        "pg" => {
+            let mut agent = PolicyGradientAgent::new(app_config.pg.clone());
+            if cli.resume {
+                resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
+            }
+            if cli.headless {
+                let trainer = Trainer::new(trainer_config);
+                trainer.train(&mut agent);
+                Ok(())
+            } else {
+                run_dashboard(agent, trainer_config, total_episodes)
+            }
+        }
         _ => unreachable!(),
     }
 }
 
-fn run_dqn(resume: bool, headless: bool, config: &AppConfig) -> Result<()> {
-    let trainer_config = config.training.clone();
-    let total_episodes = trainer_config.num_episodes;
-    let mut agent = DqnAgent::new(config.dqn.clone());
-
-    if resume {
-        let manager = CheckpointManager::new(CheckpointManagerConfig {
-            checkpoint_dir: trainer_config.checkpoint_dir.clone(),
-            ..config.checkpoint.clone()
-        });
-        match manager.load_latest() {
-            Ok(data) => {
-                agent
-                    .load_from_dir(&data.path)
-                    .map_err(|e| anyhow::anyhow!("loading DQN checkpoint weights: {e}"))?;
-                agent.restore_training_state(&data.training_state);
-                if headless {
-                    println!("Resumed from episode {}", data.metadata.episode);
-                }
+/// Resume an agent from the latest checkpoint using trait-based loading.
+fn resume_agent(
+    agent: &mut dyn TrainableAgent,
+    trainer_config: &TrainerConfig,
+    config: &AppConfig,
+    headless: bool,
+) -> Result<()> {
+    let manager = CheckpointManager::new(CheckpointManagerConfig {
+        checkpoint_dir: trainer_config.checkpoint_dir.clone(),
+        ..config.checkpoint.clone()
+    });
+    match manager.load_agent_latest() {
+        Ok(data) => {
+            agent
+                .load_weights_from_dir(&data.path)
+                .map_err(|e| anyhow::anyhow!("loading checkpoint weights: {e}"))?;
+            agent
+                .restore_training_state_json(&data.training_state_json)
+                .map_err(|e| anyhow::anyhow!("restoring training state: {e}"))?;
+            if headless {
+                println!("Resumed from episode {}", data.metadata.episode);
             }
-            Err(e) => {
-                if headless {
-                    println!("No checkpoint found ({}), starting fresh", e);
-                }
+        }
+        Err(e) => {
+            if headless {
+                println!("No checkpoint found ({}), starting fresh", e);
             }
         }
     }
-
-    if headless {
-        let trainer = Trainer::new(trainer_config);
-        trainer.train(&mut agent);
-        return Ok(());
-    }
-
-    run_dashboard(agent, trainer_config, total_episodes)
-}
-
-fn run_pg(resume: bool, headless: bool, config: &AppConfig) -> Result<()> {
-    let trainer_config = config.training.clone();
-    let total_episodes = trainer_config.num_episodes;
-    let mut agent = PolicyGradientAgent::new(config.pg.clone());
-
-    if resume {
-        let manager = CheckpointManager::new(CheckpointManagerConfig {
-            checkpoint_dir: trainer_config.checkpoint_dir.clone(),
-            ..config.checkpoint.clone()
-        });
-        match manager.load_pg_latest() {
-            Ok(data) => {
-                agent
-                    .load_from_dir(&data.path)
-                    .map_err(|e| anyhow::anyhow!("loading PG checkpoint weights: {e}"))?;
-                agent.restore_training_state(&data.training_state);
-                if headless {
-                    println!("Resumed from episode {}", data.metadata.episode);
-                }
-            }
-            Err(e) => {
-                if headless {
-                    println!("No PG checkpoint found ({}), starting fresh", e);
-                }
-            }
-        }
-    }
-
-    if headless {
-        let trainer = Trainer::new(trainer_config);
-        trainer.train(&mut agent);
-        return Ok(());
-    }
-
-    run_dashboard(agent, trainer_config, total_episodes)
+    Ok(())
 }
 
 fn run_dashboard<A: TrainableAgent + Send + 'static>(

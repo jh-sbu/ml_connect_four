@@ -115,4 +115,10 @@ pub trait TrainableAgent: Agent {
         episode: usize,
         timestamp: u64,
     ) -> CheckpointMetadata;
+    /// Load network weights from a checkpoint directory.
+    fn load_weights_from_dir(&mut self, dir: &Path) -> Result<(), Box<dyn std::error::Error>>;
+    /// Restore training state from a JSON string.
+    fn restore_training_state_json(&mut self, json: &str) -> Result<(), Box<dyn std::error::Error>>;
+    /// Set the RNG seed for the next episode (for deterministic training).
+    fn set_episode_seed(&mut self, _seed: u64) {}
 }

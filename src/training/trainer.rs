@@ -74,6 +74,9 @@ impl Trainer {
         println!("-------------------------------------------");
 
         for ep in start_episode..=end_episode {
+            if let Some(base) = self.config.base_seed {
+                agent.set_episode_seed(episode::episode_seed(base, ep));
+            }
             let trace = episode::play_self_play_episode(agent);
             let update_metrics = agent.batch_update(&trace.experiences);
 
@@ -186,6 +189,10 @@ impl Trainer {
                         self.save_checkpoint_with_tx(agent, &metrics, ep, &tx);
                     }
                 }
+            }
+
+            if let Some(base) = self.config.base_seed {
+                agent.set_episode_seed(episode::episode_seed(base, ep));
             }
 
             // Play episode with live game updates

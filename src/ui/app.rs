@@ -1,5 +1,5 @@
 use crate::ai::algorithms::{DqnAgent, DqnConfig, PgConfig, PolicyGradientAgent};
-use crate::ai::{Agent, NegamaxAgent, RandomAgent};
+use crate::ai::{Agent, NegamaxAgent, RandomAgent, TrainableAgent};
 use crate::checkpoint::{CheckpointManager, CheckpointManagerConfig};
 use crate::game::{GameOutcome, GameState, MoveError, Player};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
@@ -317,8 +317,8 @@ impl App {
                 agent.set_epsilon(0.0);
 
                 let manager = CheckpointManager::new(CheckpointManagerConfig::default());
-                let load_msg = match manager.load_latest() {
-                    Ok(data) => match agent.load_from_dir(&data.path) {
+                let load_msg = match manager.load_agent_latest() {
+                    Ok(data) => match agent.load_weights_from_dir(&data.path) {
                         Ok(()) => format!("DQN loaded (episode {})", data.metadata.episode),
                         Err(_) => "DQN (failed to load checkpoint)".to_string(),
                     },
@@ -328,28 +328,21 @@ impl App {
                 PlayerKind::Ai(Box::new(agent))
             }
             PlayerType::PgAi => {
-                let agent = PolicyGradientAgent::new(PgConfig::default());
+                let mut agent = PolicyGradientAgent::new(PgConfig::default());
 
                 let manager = CheckpointManager::new(CheckpointManagerConfig {
                     checkpoint_dir: std::path::PathBuf::from("pg_checkpoints"),
                     ..Default::default()
                 });
-                let (boxed_agent, load_msg) = match manager.load_pg_latest() {
-                    Ok(data) => {
-                        let mut a = agent;
-                        match a.load_from_dir(&data.path) {
-                            Ok(()) => {
-                                let msg =
-                                    format!("PG loaded (episode {})", data.metadata.episode);
-                                (a, msg)
-                            }
-                            Err(_) => (a, "PG (failed to load checkpoint)".to_string()),
-                        }
-                    }
-                    Err(_) => (agent, "PG (untrained, no checkpoint)".to_string()),
+                let load_msg = match manager.load_agent_latest() {
+                    Ok(data) => match agent.load_weights_from_dir(&data.path) {
+                        Ok(()) => format!("PG loaded (episode {})", data.metadata.episode),
+                        Err(_) => "PG (failed to load checkpoint)".to_string(),
+                    },
+                    Err(_) => "PG (untrained, no checkpoint)".to_string(),
                 };
                 self.message = Some(load_msg);
-                PlayerKind::Ai(Box::new(boxed_agent))
+                PlayerKind::Ai(Box::new(agent))
             }
             PlayerType::NegamaxAi => {
                 self.message = Some("Negamax AI (depth 7)".to_string());

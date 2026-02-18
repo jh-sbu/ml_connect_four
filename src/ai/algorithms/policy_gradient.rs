@@ -556,6 +556,16 @@ impl TrainableAgent for PolicyGradientAgent {
             }),
         }
     }
+
+    fn load_weights_from_dir(&mut self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        self.load_from_dir(dir)
+    }
+
+    fn restore_training_state_json(&mut self, json: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let state: PgTrainingState = serde_json::from_str(json)?;
+        self.restore_training_state(&state);
+        Ok(())
+    }
 }
 
 /// Apply legal action mask and compute softmax probabilities.

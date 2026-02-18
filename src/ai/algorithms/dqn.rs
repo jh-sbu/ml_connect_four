@@ -427,6 +427,16 @@ impl TrainableAgent for DqnAgent {
             pg_hyperparameters: None,
         }
     }
+
+    fn load_weights_from_dir(&mut self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        self.load_from_dir(dir)
+    }
+
+    fn restore_training_state_json(&mut self, json: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let state: DqnTrainingState = serde_json::from_str(json)?;
+        self.restore_training_state(&state);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
