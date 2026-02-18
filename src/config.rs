@@ -140,6 +140,11 @@ impl AppConfig {
                 "pg.max_grad_norm must be > 0".into(),
             ));
         }
+        if self.pg.rollout_episodes == 0 {
+            return Err(ConfigError::Validation(
+                "pg.rollout_episodes must be >= 1".into(),
+            ));
+        }
         if self.training.live_update_interval == 0 {
             return Err(ConfigError::Validation(
                 "training.live_update_interval must be > 0".into(),
@@ -324,6 +329,13 @@ num_episodes = 500
     fn test_validation_rejects_max_grad_norm_zero() {
         let mut config = AppConfig::default();
         config.pg.max_grad_norm = 0.0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_rollout_episodes_zero() {
+        let mut config = AppConfig::default();
+        config.pg.rollout_episodes = 0;
         assert!(config.validate().is_err());
     }
 

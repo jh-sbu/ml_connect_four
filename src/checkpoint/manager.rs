@@ -462,6 +462,7 @@ mod tests {
             value_coeff: 0.6,
             ppo_epochs: 3,
             max_grad_norm: 1.0,
+            rollout_episodes: 1,
         };
         let agent = PolicyGradientAgent::new(pg_config.clone());
 

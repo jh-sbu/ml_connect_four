@@ -23,6 +23,7 @@
 # value_coeff = 0.5
 # ppo_epochs = 4
 # max_grad_norm = 0.5
+# rollout_episodes = 1  # Episodes to buffer before each PPO update (try 4–8 for larger batches)
 
 # [training]
 # num_episodes = 10000

@@ -36,6 +36,7 @@ pub struct PgHyperparameters {
     pub value_coeff: f32,
     pub ppo_epochs: usize,
     pub max_grad_norm: f32,
+    pub rollout_episodes: usize,
 }
 
 /// Top-level checkpoint metadata written to metadata.json.
@@ -67,6 +68,10 @@ pub struct DqnTrainingState {
     pub min_replay_size: usize,
 }
 
+fn default_rollout_episodes() -> usize {
+    1
+}
+
 /// PG-specific training state written to training_state.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PgTrainingState {
@@ -80,4 +85,6 @@ pub struct PgTrainingState {
     pub value_coeff: f32,
     pub ppo_epochs: usize,
     pub max_grad_norm: f32,
+    #[serde(default = "default_rollout_episodes")]
+    pub rollout_episodes: usize,
 }
