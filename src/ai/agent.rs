@@ -121,4 +121,8 @@ pub trait TrainableAgent: Agent {
     fn restore_training_state_json(&mut self, json: &str) -> Result<(), Box<dyn std::error::Error>>;
     /// Set the RNG seed for the next episode (for deterministic training).
     fn set_episode_seed(&mut self, _seed: u64) {}
+    /// Clone the agent into an inference-only, Send-safe copy for parallel eval.
+    fn clone_for_eval(&self) -> Box<dyn Agent + Send> {
+        panic!("clone_for_eval not implemented for this agent")
+    }
 }

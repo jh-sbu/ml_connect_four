@@ -145,6 +145,11 @@ impl AppConfig {
                 "training.live_update_interval must be > 0".into(),
             ));
         }
+        if self.training.num_eval_threads == 0 {
+            return Err(ConfigError::Validation(
+                "training.num_eval_threads must be >= 1".into(),
+            ));
+        }
 
         Ok(())
     }
@@ -326,6 +331,13 @@ num_episodes = 500
     fn test_validation_rejects_zero_live_update_interval() {
         let mut config = AppConfig::default();
         config.training.live_update_interval = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validation_rejects_zero_eval_threads() {
+        let mut config = AppConfig::default();
+        config.training.num_eval_threads = 0;
         assert!(config.validate().is_err());
     }
 }

@@ -316,6 +316,38 @@ impl DqnAgent {
     }
 }
 
+/// Inference-only, Send-safe DQN agent for parallel evaluation.
+struct DqnEvalAgent {
+    network: DqnNetwork<InferBackend>,
+    device: <InferBackend as Backend>::Device,
+}
+
+impl Agent for DqnEvalAgent {
+    fn select_action(&mut self, state: &GameState, _training: bool) -> usize {
+        let legal = state.legal_actions();
+        assert!(!legal.is_empty(), "No legal actions");
+        let state_tensor = encode_state::<InferBackend>(state, &self.device).unsqueeze::<4>();
+        let q_values = self.network.forward(state_tensor);
+        let q_vec: Vec<f32> = q_values
+            .into_data()
+            .to_vec()
+            .expect("f32 tensor data extraction");
+        let mut best_action = legal[0];
+        let mut best_q = f32::NEG_INFINITY;
+        for &col in &legal {
+            if q_vec[col] > best_q {
+                best_q = q_vec[col];
+                best_action = col;
+            }
+        }
+        best_action
+    }
+
+    fn name(&self) -> &str {
+        "DqnEval"
+    }
+}
+
 impl Agent for DqnAgent {
     fn select_action(&mut self, state: &GameState, training: bool) -> usize {
         self.pick_action(state, training)
@@ -437,6 +469,13 @@ impl TrainableAgent for DqnAgent {
         self.restore_training_state(&state);
         Ok(())
     }
+
+    fn clone_for_eval(&self) -> Box<dyn Agent + Send> {
+        Box::new(DqnEvalAgent {
+            network: self.target_network.clone(),
+            device: self.device.clone(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -548,6 +587,18 @@ mod tests {
             "epsilon should jump to epsilon_end, got {}",
             agent.epsilon()
         );
+    }
+
+    #[test]
+    fn test_dqn_eval_agent_selects_legal_action() {
+        let agent = DqnAgent::new(DqnConfig::default());
+        let mut eval_agent = agent.clone_for_eval();
+        let state = GameState::initial();
+        let legal = state.legal_actions();
+        for _ in 0..10 {
+            let action = eval_agent.select_action(&state, false);
+            assert!(legal.contains(&action), "Action {} is not legal", action);
+        }
     }
 
     #[test]

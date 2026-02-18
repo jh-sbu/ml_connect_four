@@ -33,6 +33,7 @@
 # checkpoint_dir = "checkpoints"
 # live_update_interval = 4
 # base_seed = 42
+# num_eval_threads = 1
 
 # [checkpoint]
 # checkpoint_dir = "checkpoints"

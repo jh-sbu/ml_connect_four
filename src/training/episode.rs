@@ -209,6 +209,55 @@ pub fn evaluate(agent: &mut dyn TrainableAgent, eval_games: usize) -> f32 {
     wins as f32 / total as f32
 }
 
+/// Evaluate agent vs random over N games using multiple threads.
+/// Each thread gets its own inference-only agent clone.
+/// Falls back to effective 1-thread behaviour if `num_threads > eval_games`.
+pub fn parallel_evaluate(
+    agent: &mut dyn TrainableAgent,
+    eval_games: usize,
+    num_threads: usize,
+) -> f32 {
+    let eval_state = agent.enter_eval_mode();
+    let effective_threads = num_threads.min(eval_games).max(1);
+
+    // Distribute game indices round-robin across threads
+    let mut thread_game_indices: Vec<Vec<usize>> = vec![Vec::new(); effective_threads];
+    for game_idx in 0..eval_games {
+        thread_game_indices[game_idx % effective_threads].push(game_idx);
+    }
+
+    // Clone one eval agent per thread
+    let eval_agents: Vec<Box<dyn Agent + Send>> = (0..effective_threads)
+        .map(|_| agent.clone_for_eval())
+        .collect();
+
+    let handles: Vec<_> = eval_agents
+        .into_iter()
+        .zip(thread_game_indices.into_iter())
+        .map(|(mut eval_agent, game_indices)| {
+            std::thread::spawn(move || {
+                let mut random = RandomAgent::new();
+                let mut wins = 0;
+                for game_idx in game_indices {
+                    let agent_is_red = game_idx % 2 == 0;
+                    if let Some(true) = play_eval_game(eval_agent.as_mut(), &mut random, agent_is_red) {
+                        wins += 1;
+                    }
+                }
+                wins
+            })
+        })
+        .collect();
+
+    let total_wins: usize = handles
+        .into_iter()
+        .map(|h| h.join().expect("eval thread panicked"))
+        .sum();
+
+    agent.exit_eval_mode(eval_state);
+    total_wins as f32 / eval_games as f32
+}
+
 /// Derive a deterministic seed for a given episode index.
 pub fn episode_seed(base_seed: u64, episode_index: usize) -> u64 {
     // FNV-1a-inspired mixing for deterministic, well-distributed seeds
@@ -224,6 +273,7 @@ pub fn episode_seed(base_seed: u64, episode_index: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::algorithms::{DqnAgent, DqnConfig, PgConfig, PolicyGradientAgent};
 
     #[test]
     fn test_play_self_play_episode_terminates() {
@@ -294,5 +344,50 @@ mod tests {
         let s4 = episode_seed(1, 0);
         let s5 = episode_seed(2, 0);
         assert_ne!(s4, s5);
+    }
+
+    #[test]
+    fn test_parallel_evaluate_single_thread() {
+        let mut agent = DqnAgent::new(DqnConfig {
+            min_replay_size: 5,
+            batch_size: 2,
+            ..Default::default()
+        });
+        let wr = parallel_evaluate(&mut agent, 10, 1);
+        assert!((0.0..=1.0).contains(&wr), "win rate {} out of range", wr);
+    }
+
+    #[test]
+    fn test_parallel_evaluate_multi_thread_dqn() {
+        let mut agent = DqnAgent::new(DqnConfig {
+            min_replay_size: 5,
+            batch_size: 2,
+            ..Default::default()
+        });
+        // 20 games, 4 threads — non-divisible distribution
+        let wr = parallel_evaluate(&mut agent, 20, 4);
+        assert!((0.0..=1.0).contains(&wr), "win rate {} out of range", wr);
+    }
+
+    #[test]
+    fn test_parallel_evaluate_multi_thread_pg() {
+        let mut agent = PolicyGradientAgent::new(PgConfig {
+            ppo_epochs: 1,
+            ..Default::default()
+        });
+        let wr = parallel_evaluate(&mut agent, 10, 2);
+        assert!((0.0..=1.0).contains(&wr), "win rate {} out of range", wr);
+    }
+
+    #[test]
+    fn test_parallel_evaluate_single_game_clamps() {
+        let mut agent = DqnAgent::new(DqnConfig {
+            min_replay_size: 5,
+            batch_size: 2,
+            ..Default::default()
+        });
+        // 1 game, 4 threads: effective_threads clamped to 1
+        let wr = parallel_evaluate(&mut agent, 1, 4);
+        assert!(wr == 0.0 || wr == 1.0, "single-game result must be 0 or 1, got {}", wr);
     }
 }

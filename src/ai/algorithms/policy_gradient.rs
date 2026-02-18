@@ -455,6 +455,40 @@ impl PolicyGradientAgent {
     }
 }
 
+/// Inference-only, Send-safe PG agent for parallel evaluation.
+struct PgEvalAgent {
+    network: PolicyValueNetwork<InferBackend>,
+    device: <InferBackend as Backend>::Device,
+}
+
+impl Agent for PgEvalAgent {
+    fn select_action(&mut self, state: &GameState, _training: bool) -> usize {
+        let legal = state.legal_actions();
+        assert!(!legal.is_empty(), "No legal actions");
+        let state_tensor =
+            encode_state::<InferBackend>(state, &self.device).unsqueeze::<4>();
+        let (logits, _value) = self.network.forward(state_tensor);
+        let logits_vec: Vec<f32> = logits
+            .into_data()
+            .to_vec()
+            .expect("f32 tensor data extraction");
+        let probs = masked_softmax(&logits_vec, &legal);
+        let mut best_action = legal[0];
+        let mut best_prob = f32::NEG_INFINITY;
+        for &col in &legal {
+            if probs[col] > best_prob {
+                best_prob = probs[col];
+                best_action = col;
+            }
+        }
+        best_action
+    }
+
+    fn name(&self) -> &str {
+        "PgEval"
+    }
+}
+
 impl Agent for PolicyGradientAgent {
     fn select_action(&mut self, state: &GameState, training: bool) -> usize {
         self.pick_action(state, training)
@@ -566,6 +600,13 @@ impl TrainableAgent for PolicyGradientAgent {
         self.restore_training_state(&state);
         Ok(())
     }
+
+    fn clone_for_eval(&self) -> Box<dyn Agent + Send> {
+        Box::new(PgEvalAgent {
+            network: self.network.clone().valid(),
+            device: self.device.clone(),
+        })
+    }
 }
 
 /// Apply legal action mask and compute softmax probabilities.
@@ -643,6 +684,18 @@ fn sample_categorical(probs: &[f32], legal: &[usize], rng: &mut StdRng) -> usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pg_eval_agent_selects_legal_action() {
+        let agent = PolicyGradientAgent::new(PgConfig::default());
+        let mut eval_agent = agent.clone_for_eval();
+        let state = GameState::initial();
+        let legal = state.legal_actions();
+        for _ in 0..10 {
+            let action = eval_agent.select_action(&state, false);
+            assert!(legal.contains(&action), "Action {} is not legal", action);
+        }
+    }
 
     #[test]
     fn test_pg_agent_selects_legal_action() {

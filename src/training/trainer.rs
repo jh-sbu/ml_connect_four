@@ -21,6 +21,7 @@ pub struct TrainerConfig {
     pub checkpoint_dir: PathBuf,
     pub live_update_interval: usize,
     pub base_seed: Option<u64>,
+    pub num_eval_threads: usize,
 }
 
 impl Default for TrainerConfig {
@@ -34,6 +35,7 @@ impl Default for TrainerConfig {
             checkpoint_dir: PathBuf::from("checkpoints"),
             live_update_interval: 4,
             base_seed: None,
+            num_eval_threads: 1,
         }
     }
 }
@@ -107,7 +109,7 @@ impl Trainer {
             let needs_eval = ep % self.config.eval_interval == 0;
             let needs_checkpoint = ep % self.config.checkpoint_interval == 0;
             let eval_wr = if needs_eval || needs_checkpoint {
-                Some(episode::evaluate(agent, self.config.eval_games))
+                Some(self.do_evaluate(agent))
             } else {
                 None
             };
@@ -145,7 +147,7 @@ impl Trainer {
             metrics.total_episodes()
         );
 
-        let final_wr = episode::evaluate(agent, self.config.eval_games);
+        let final_wr = self.do_evaluate(agent);
         println!("Final eval vs Random: {:.1}% win rate", final_wr * 100.0);
         let _ = last_entropy; // suppress unused warning when not logging
     }
@@ -233,7 +235,7 @@ impl Trainer {
             let needs_eval = ep % self.config.eval_interval == 0;
             let needs_checkpoint = ep % self.config.checkpoint_interval == 0;
             let eval_wr = if needs_eval || needs_checkpoint {
-                Some(episode::evaluate(agent, self.config.eval_games))
+                Some(self.do_evaluate(agent))
             } else {
                 None
             };
@@ -255,6 +257,14 @@ impl Trainer {
         let _ = tx.send(TrainingUpdate::Finished);
     }
 
+    fn do_evaluate(&self, agent: &mut dyn TrainableAgent) -> f32 {
+        if self.config.num_eval_threads > 1 {
+            episode::parallel_evaluate(agent, self.config.eval_games, self.config.num_eval_threads)
+        } else {
+            episode::evaluate(agent, self.config.eval_games)
+        }
+    }
+
     fn save_checkpoint_with_tx(
         &self,
         agent: &mut dyn TrainableAgent,
@@ -262,7 +272,7 @@ impl Trainer {
         episode: usize,
         tx: &mpsc::Sender<TrainingUpdate>,
     ) {
-        let eval_wr = episode::evaluate(agent, self.config.eval_games);
+        let eval_wr = self.do_evaluate(agent);
         self.save_checkpoint_with_tx_precomputed(agent, metrics, episode, eval_wr, tx);
     }
 
