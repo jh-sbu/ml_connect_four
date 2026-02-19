@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::game::Player;
 
 /// Result of a single episode.
@@ -8,76 +10,101 @@ pub struct EpisodeResult {
 
 /// Training metrics tracker with rolling window computations.
 pub struct TrainingMetrics {
-    episode_results: Vec<EpisodeResult>,
-    update_losses: Vec<f32>,
+    episode_results: VecDeque<EpisodeResult>,
+    update_losses: VecDeque<f32>,
+    capacity: usize,
+    total_episodes: usize, // lifetime count, never capped
 }
 
 impl TrainingMetrics {
-    pub fn new() -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         TrainingMetrics {
-            episode_results: Vec::new(),
-            update_losses: Vec::new(),
+            episode_results: VecDeque::with_capacity(capacity),
+            update_losses: VecDeque::with_capacity(capacity),
+            capacity,
+            total_episodes: 0,
         }
     }
 
+    pub fn new() -> Self {
+        Self::with_capacity(100)
+    }
+
     pub fn record_episode(&mut self, result: EpisodeResult) {
-        self.episode_results.push(result);
+        self.total_episodes += 1;
+        self.episode_results.push_back(result);
+        if self.episode_results.len() > self.capacity {
+            self.episode_results.pop_front();
+        }
     }
 
     pub fn record_update(&mut self, loss: f32) {
-        self.update_losses.push(loss);
+        self.update_losses.push_back(loss);
+        if self.update_losses.len() > self.capacity {
+            self.update_losses.pop_front();
+        }
     }
 
     /// Win rate for Red in the last N episodes.
     pub fn win_rate(&self, last_n: usize) -> f32 {
-        let results = self.last_n_results(last_n);
-        if results.is_empty() {
+        let n = self.episode_results.len().min(last_n);
+        if n == 0 {
             return 0.0;
         }
-        let wins = results
+        let wins = self
+            .episode_results
             .iter()
+            .rev()
+            .take(n)
             .filter(|r| r.winner == Some(Player::Red))
             .count();
-        wins as f32 / results.len() as f32
+        wins as f32 / n as f32
     }
 
     /// Draw rate in the last N episodes.
     pub fn draw_rate(&self, last_n: usize) -> f32 {
-        let results = self.last_n_results(last_n);
-        if results.is_empty() {
+        let n = self.episode_results.len().min(last_n);
+        if n == 0 {
             return 0.0;
         }
-        let draws = results.iter().filter(|r| r.winner.is_none()).count();
-        draws as f32 / results.len() as f32
+        let draws = self
+            .episode_results
+            .iter()
+            .rev()
+            .take(n)
+            .filter(|r| r.winner.is_none())
+            .count();
+        draws as f32 / n as f32
     }
 
     /// Average loss over the last N updates.
     pub fn average_loss(&self, last_n: usize) -> f32 {
-        if self.update_losses.is_empty() {
+        let n = self.update_losses.len().min(last_n);
+        if n == 0 {
             return 0.0;
         }
-        let start = self.update_losses.len().saturating_sub(last_n);
-        let slice = &self.update_losses[start..];
-        slice.iter().sum::<f32>() / slice.len() as f32
+        let sum: f32 = self.update_losses.iter().rev().take(n).sum();
+        sum / n as f32
     }
 
     /// Average game length over the last N episodes.
     pub fn average_game_length(&self, last_n: usize) -> f32 {
-        let results = self.last_n_results(last_n);
-        if results.is_empty() {
+        let n = self.episode_results.len().min(last_n);
+        if n == 0 {
             return 0.0;
         }
-        let total: usize = results.iter().map(|r| r.game_length).sum();
-        total as f32 / results.len() as f32
+        let total: usize = self
+            .episode_results
+            .iter()
+            .rev()
+            .take(n)
+            .map(|r| r.game_length)
+            .sum();
+        total as f32 / n as f32
     }
 
     pub fn total_episodes(&self) -> usize {
-        self.episode_results.len()
-    }
-
-    fn last_n_results(&self, last_n: usize) -> &[EpisodeResult] {
-        let start = self.episode_results.len().saturating_sub(last_n);
-        &self.episode_results[start..]
+        self.total_episodes
     }
 }
 
@@ -89,50 +116,74 @@ impl Default for TrainingMetrics {
 
 /// Per-episode timing tracker for profiling the training loop.
 pub struct TimingMetrics {
-    episode_micros: Vec<u32>, // per-episode simulation µs
-    update_micros: Vec<u32>,  // per-batch-update µs
+    episode_micros: VecDeque<u32>, // per-episode simulation µs
+    update_micros: VecDeque<u32>,  // per-batch-update µs
+    capacity: usize,
     window_start: std::time::Instant,
     window_count: usize,
 }
 
 impl TimingMetrics {
-    pub fn new() -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         TimingMetrics {
-            episode_micros: Vec::new(),
-            update_micros: Vec::new(),
+            episode_micros: VecDeque::with_capacity(capacity),
+            update_micros: VecDeque::with_capacity(capacity),
+            capacity,
             window_start: std::time::Instant::now(),
             window_count: 0,
         }
     }
 
+    pub fn new() -> Self {
+        Self::with_capacity(100)
+    }
+
     pub fn record_episode_time(&mut self, d: std::time::Duration) {
-        self.episode_micros.push(d.as_micros() as u32);
+        self.episode_micros.push_back(d.as_micros() as u32);
+        if self.episode_micros.len() > self.capacity {
+            self.episode_micros.pop_front();
+        }
         self.window_count += 1;
     }
 
     pub fn record_update_time(&mut self, d: std::time::Duration) {
-        self.update_micros.push(d.as_micros() as u32);
+        self.update_micros.push_back(d.as_micros() as u32);
+        if self.update_micros.len() > self.capacity {
+            self.update_micros.pop_front();
+        }
     }
 
     /// Mean of the last `last_n` episode times in milliseconds.
     pub fn avg_episode_ms(&self, last_n: usize) -> f32 {
-        if self.episode_micros.is_empty() {
+        let n = self.episode_micros.len().min(last_n);
+        if n == 0 {
             return 0.0;
         }
-        let start = self.episode_micros.len().saturating_sub(last_n);
-        let slice = &self.episode_micros[start..];
-        let mean = slice.iter().map(|&v| v as f64).sum::<f64>() / slice.len() as f64;
+        let mean = self
+            .episode_micros
+            .iter()
+            .rev()
+            .take(n)
+            .map(|&v| v as f64)
+            .sum::<f64>()
+            / n as f64;
         (mean / 1000.0) as f32
     }
 
     /// Mean of the last `last_n` update times in milliseconds.
     pub fn avg_update_ms(&self, last_n: usize) -> f32 {
-        if self.update_micros.is_empty() {
+        let n = self.update_micros.len().min(last_n);
+        if n == 0 {
             return 0.0;
         }
-        let start = self.update_micros.len().saturating_sub(last_n);
-        let slice = &self.update_micros[start..];
-        let mean = slice.iter().map(|&v| v as f64).sum::<f64>() / slice.len() as f64;
+        let mean = self
+            .update_micros
+            .iter()
+            .rev()
+            .take(n)
+            .map(|&v| v as f64)
+            .sum::<f64>()
+            / n as f64;
         (mean / 1000.0) as f32
     }
 

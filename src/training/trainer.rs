@@ -60,8 +60,8 @@ impl Trainer {
 
     /// Run the full training loop (headless, stdout output).
     pub fn train(&self, agent: &mut dyn TrainableAgent) {
-        let mut metrics = TrainingMetrics::new();
-        let mut timing = TimingMetrics::new();
+        let mut metrics = TrainingMetrics::with_capacity(self.config.log_interval);
+        let mut timing = TimingMetrics::with_capacity(self.config.log_interval);
         let mut last_entropy: Option<f32> = None;
 
         let start_episode = agent.episode_count() + 1;
@@ -171,8 +171,8 @@ impl Trainer {
         pause: Arc<AtomicBool>,
         quit: Arc<AtomicBool>,
     ) {
-        let mut metrics = TrainingMetrics::new();
-        let mut timing = TimingMetrics::new();
+        let mut metrics = TrainingMetrics::with_capacity(self.config.log_interval);
+        let mut timing = TimingMetrics::with_capacity(self.config.log_interval);
         let mut last_entropy: Option<f32> = None;
 
         let start_episode = agent.episode_count() + 1;
