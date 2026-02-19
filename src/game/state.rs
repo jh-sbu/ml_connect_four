@@ -1,4 +1,4 @@
-use super::{Board, Player};
+use super::{Board, LegalActions, Player};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameOutcome {
@@ -51,9 +51,9 @@ impl GameState {
     }
 
     /// Get list of legal columns (not full)
-    pub fn legal_actions(&self) -> Vec<usize> {
+    pub fn legal_actions(&self) -> LegalActions {
         if self.is_terminal() {
-            return Vec::new();
+            return LegalActions::new();
         }
 
         (0..super::board::COLS)

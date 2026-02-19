@@ -3837,6 +3837,7 @@ name = "ml_connect_four"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arrayvec",
  "burn",
  "clap",
  "crossterm 0.28.1",
