@@ -15,6 +15,9 @@ pub struct MetricsSnapshot {
     pub step_count: usize,
     pub algorithm: String,
     pub policy_entropy: Option<f32>,
+    pub episodes_per_sec: f32,
+    pub avg_episode_ms: f32,
+    pub avg_update_ms: f32,
 }
 
 /// Live game state sent during training episodes.

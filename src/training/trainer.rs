@@ -7,7 +7,7 @@ use crate::ai::TrainableAgent;
 use crate::checkpoint::{CheckpointManager, CheckpointManagerConfig, CheckpointMetrics};
 use crate::training::dashboard_msg::{MetricsSnapshot, TrainingCommand, TrainingUpdate};
 use crate::training::episode;
-use crate::training::metrics::TrainingMetrics;
+use crate::training::metrics::{TimingMetrics, TrainingMetrics};
 
 /// Trainer configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -61,6 +61,7 @@ impl Trainer {
     /// Run the full training loop (headless, stdout output).
     pub fn train(&self, agent: &mut dyn TrainableAgent) {
         let mut metrics = TrainingMetrics::new();
+        let mut timing = TimingMetrics::new();
         let mut last_entropy: Option<f32> = None;
 
         let start_episode = agent.episode_count() + 1;
@@ -79,8 +80,13 @@ impl Trainer {
             if let Some(base) = self.config.base_seed {
                 agent.set_episode_seed(episode::episode_seed(base, ep));
             }
+            let t0 = std::time::Instant::now();
             let trace = episode::play_self_play_episode(agent);
+            timing.record_episode_time(t0.elapsed());
+
+            let t0 = std::time::Instant::now();
             let update_metrics = agent.batch_update(&trace.experiences);
+            timing.record_update_time(t0.elapsed());
 
             if update_metrics.loss > 0.0 {
                 metrics.record_update(update_metrics.loss);
@@ -93,7 +99,7 @@ impl Trainer {
             if ep % self.config.log_interval == 0 {
                 let window = self.config.log_interval;
                 println!(
-                    "Episode {}/{} | {}: {:.3} | loss: {:.4} | win_rate({}): {:.1}% | draw: {:.1}% | avg_len: {:.1}",
+                    "Episode {}/{} | {}: {:.3} | loss: {:.4} | win_rate({}): {:.1}% | draw: {:.1}% | avg_len: {:.1} | ep: {:.1}ms | upd: {:.1}ms | {:.1}ep/s",
                     ep,
                     end_episode,
                     agent.algorithm_metric_label(),
@@ -103,7 +109,11 @@ impl Trainer {
                     metrics.win_rate(window) * 100.0,
                     metrics.draw_rate(window) * 100.0,
                     metrics.average_game_length(window),
+                    timing.avg_episode_ms(window),
+                    timing.avg_update_ms(window),
+                    timing.episodes_per_sec(),
                 );
+                timing.reset_window();
             }
 
             let needs_eval = ep % self.config.eval_interval == 0;
@@ -162,6 +172,7 @@ impl Trainer {
         quit: Arc<AtomicBool>,
     ) {
         let mut metrics = TrainingMetrics::new();
+        let mut timing = TimingMetrics::new();
         let mut last_entropy: Option<f32> = None;
 
         let start_episode = agent.episode_count() + 1;
@@ -198,12 +209,17 @@ impl Trainer {
             }
 
             // Play episode with live game updates
+            let t0 = std::time::Instant::now();
             let trace = episode::play_self_play_episode_live(
                 agent,
                 &tx,
                 self.config.live_update_interval,
             );
+            timing.record_episode_time(t0.elapsed());
+
+            let t0 = std::time::Instant::now();
             let update_metrics = agent.batch_update(&trace.experiences);
+            timing.record_update_time(t0.elapsed());
 
             if update_metrics.loss > 0.0 {
                 metrics.record_update(update_metrics.loss);
@@ -227,8 +243,12 @@ impl Trainer {
                     step_count: agent.step_count(),
                     algorithm: agent.algorithm_name().to_string(),
                     policy_entropy: last_entropy,
+                    episodes_per_sec: timing.episodes_per_sec(),
+                    avg_episode_ms: timing.avg_episode_ms(window),
+                    avg_update_ms: timing.avg_update_ms(window),
                 };
                 let _ = tx.send(TrainingUpdate::Metrics(snap));
+                timing.reset_window();
             }
 
             // Eval and checkpoint (share a single evaluate call)

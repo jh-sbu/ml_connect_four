@@ -330,6 +330,23 @@ fn render_stats_panel(frame: &mut Frame, dashboard: &DashboardState, area: Rect)
         ]),
     ]);
 
+    if dashboard.episodes_per_sec > 0.0 {
+        lines.extend(vec![
+            Line::from(vec![
+                Span::styled("Ep/sec:     ", Style::default().fg(Color::White)),
+                Span::raw(format!("{:.1}", dashboard.episodes_per_sec)),
+            ]),
+            Line::from(vec![
+                Span::styled("Ep time:    ", Style::default().fg(Color::White)),
+                Span::raw(format!("{:.1}ms", dashboard.avg_episode_ms)),
+            ]),
+            Line::from(vec![
+                Span::styled("Upd time:   ", Style::default().fg(Color::White)),
+                Span::raw(format!("{:.1}ms", dashboard.avg_update_ms)),
+            ]),
+        ]);
+    }
+
     if let Some(eval_wr) = dashboard.last_eval_win_rate {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![

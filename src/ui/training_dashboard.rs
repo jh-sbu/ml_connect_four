@@ -37,6 +37,11 @@ pub struct DashboardState {
     pub live_game: Option<GameState>,
     pub live_move_number: usize,
 
+    // Timing metrics
+    pub episodes_per_sec: f32,
+    pub avg_episode_ms: f32,
+    pub avg_update_ms: f32,
+
     // Status
     pub status: TrainingStatus,
     pub last_checkpoint: Option<String>,
@@ -63,6 +68,10 @@ impl DashboardState {
             algorithm: "DQN".to_string(),
             policy_entropy: None,
 
+            episodes_per_sec: 0.0,
+            avg_episode_ms: 0.0,
+            avg_update_ms: 0.0,
+
             live_game: None,
             live_move_number: 0,
 
@@ -84,6 +93,9 @@ impl DashboardState {
         self.step_count = snap.step_count;
         self.algorithm = snap.algorithm.clone();
         self.policy_entropy = snap.policy_entropy;
+        self.episodes_per_sec = snap.episodes_per_sec;
+        self.avg_episode_ms = snap.avg_episode_ms;
+        self.avg_update_ms = snap.avg_update_ms;
 
         // Append to histories
         let ep = snap.episode as f64;
@@ -131,6 +143,9 @@ mod tests {
             step_count: 500,
             algorithm: "DQN".to_string(),
             policy_entropy: None,
+            episodes_per_sec: 0.0,
+            avg_episode_ms: 0.0,
+            avg_update_ms: 0.0,
         };
         state.apply_metrics(&snap);
 
@@ -162,6 +177,9 @@ mod tests {
                 step_count: i * 10,
                 algorithm: "DQN".to_string(),
                 policy_entropy: None,
+                episodes_per_sec: 0.0,
+                avg_episode_ms: 0.0,
+                avg_update_ms: 0.0,
             };
             state.apply_metrics(&snap);
         }
