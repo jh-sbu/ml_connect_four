@@ -15,9 +15,9 @@ use rand::SeedableRng;
 use crate::ai::agent::{Agent, AgentMetrics, EvalState, Experience, TrainableAgent, UpdateMetrics};
 use crate::checkpoint::{CheckpointHyperparameters, CheckpointMetadata};
 use crate::ai::networks::{DqnNetwork, DqnNetworkConfig};
-use crate::ai::state_encoding::{encode_state, encode_states_batch};
+use crate::ai::state_encoding::{encode_state, encode_states_batch_into};
 use crate::checkpoint::DqnTrainingState;
-use crate::game::GameState;
+use crate::game::{GameState, ROWS, COLS};
 use crate::training::replay_buffer::ReplayBuffer;
 
 type InferBackend = Wgpu<f32, i32>;
@@ -54,6 +54,34 @@ impl Default for DqnConfig {
     }
 }
 
+struct DqnTrainBuffers {
+    sample_batch: Vec<Experience>,
+    states_buf: Vec<GameState>,
+    next_states_buf: Vec<GameState>,
+    actions: Vec<usize>,
+    rewards: Vec<f32>,
+    dones: Vec<f32>,
+    action_mask_data: Vec<f32>, // len = batch_size * 7
+    target_data: Vec<f32>,
+    flat_encode: Vec<f32>, // capacity = batch_size * 126
+}
+
+impl DqnTrainBuffers {
+    fn new(batch_size: usize) -> Self {
+        DqnTrainBuffers {
+            sample_batch: Vec::with_capacity(batch_size),
+            states_buf: Vec::with_capacity(batch_size),
+            next_states_buf: Vec::with_capacity(batch_size),
+            actions: Vec::with_capacity(batch_size),
+            rewards: Vec::with_capacity(batch_size),
+            dones: Vec::with_capacity(batch_size),
+            action_mask_data: vec![0.0f32; batch_size * 7],
+            target_data: Vec::with_capacity(batch_size),
+            flat_encode: Vec::with_capacity(batch_size * 3 * ROWS * COLS),
+        }
+    }
+}
+
 /// DQN agent with online + target networks, replay buffer, and Adam optimizer.
 pub struct DqnAgent {
     q_network: DqnNetwork<TrainBackend>,
@@ -66,6 +94,7 @@ pub struct DqnAgent {
     step_count: usize,
     episode_count: usize,
     rng: StdRng,
+    buffers: DqnTrainBuffers,
 }
 
 
@@ -78,6 +107,7 @@ impl DqnAgent {
         let optimizer = AdamConfig::new().init();
 
         let epsilon = config.epsilon_start;
+        let batch_size = config.batch_size;
         let replay_buffer = ReplayBuffer::new(config.replay_capacity);
 
         DqnAgent {
@@ -91,6 +121,7 @@ impl DqnAgent {
             step_count: 0,
             episode_count: 0,
             rng: StdRng::from_os_rng(),
+            buffers: DqnTrainBuffers::new(batch_size),
         }
     }
 
@@ -128,27 +159,46 @@ impl DqnAgent {
 
     /// Perform one gradient update step from replay buffer.
     fn train_step(&mut self) -> f32 {
-        let batch = self.replay_buffer.sample(self.config.batch_size);
-        let batch_size = batch.len();
+        let batch_size = self.config.batch_size;
 
-        // Encode states for training backend
-        let states: Vec<GameState> = batch.iter().map(|e| e.state.clone()).collect();
-        let next_states: Vec<GameState> = batch.iter().map(|e| e.next_state.clone()).collect();
-        let actions: Vec<usize> = batch.iter().map(|e| e.action).collect();
-        let rewards: Vec<f32> = batch.iter().map(|e| e.reward).collect();
-        let dones: Vec<f32> = batch.iter().map(|e| if e.done { 1.0 } else { 0.0 }).collect();
+        // Sample into pre-allocated buffer
+        self.replay_buffer
+            .sample_into(batch_size, &mut self.buffers.sample_batch);
+
+        // Unpack into separate pre-allocated Vecs (index loop avoids borrow conflicts)
+        self.buffers.states_buf.clear();
+        self.buffers.next_states_buf.clear();
+        self.buffers.actions.clear();
+        self.buffers.rewards.clear();
+        self.buffers.dones.clear();
+        for i in 0..self.buffers.sample_batch.len() {
+            let state = self.buffers.sample_batch[i].state;
+            let next_state = self.buffers.sample_batch[i].next_state;
+            let action = self.buffers.sample_batch[i].action;
+            let reward = self.buffers.sample_batch[i].reward;
+            let done = self.buffers.sample_batch[i].done;
+            self.buffers.states_buf.push(state);
+            self.buffers.next_states_buf.push(next_state);
+            self.buffers.actions.push(action);
+            self.buffers.rewards.push(reward);
+            self.buffers.dones.push(if done { 1.0 } else { 0.0 });
+        }
 
         // Forward pass on current states: [B, 7]
-        let state_tensors = encode_states_batch::<TrainBackend>(&states, &self.device);
+        let state_tensors = encode_states_batch_into::<TrainBackend>(
+            &self.buffers.states_buf,
+            &mut self.buffers.flat_encode,
+            &self.device,
+        );
         let q_all = self.q_network.forward(state_tensors);
 
         // Create one-hot action mask [B, 7] to extract Q(s, a)
-        let mut action_mask_data = vec![0.0f32; batch_size * 7];
-        for (i, &a) in actions.iter().enumerate() {
-            action_mask_data[i * 7 + a] = 1.0;
+        self.buffers.action_mask_data.fill(0.0);
+        for (i, &a) in self.buffers.actions.iter().enumerate() {
+            self.buffers.action_mask_data[i * 7 + a] = 1.0;
         }
         let action_mask = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::from(action_mask_data.as_slice()),
+            TensorData::from(self.buffers.action_mask_data.as_slice()),
             &self.device,
         )
         .reshape([batch_size as i32, 7]);
@@ -157,7 +207,12 @@ impl DqnAgent {
         let q_taken = (q_all * action_mask).sum_dim(1);
 
         // Compute targets using target network (inference backend, no grad)
-        let next_state_tensors = encode_states_batch::<InferBackend>(&next_states, &self.device);
+        // flat_encode is safe to reuse here (state_tensors was consumed above)
+        let next_state_tensors = encode_states_batch_into::<InferBackend>(
+            &self.buffers.next_states_buf,
+            &mut self.buffers.flat_encode,
+            &self.device,
+        );
         let next_q_all = self.target_network.forward(next_state_tensors); // [B, 7]
         let next_q_data: Vec<f32> = next_q_all
             .into_data()
@@ -165,13 +220,13 @@ impl DqnAgent {
             .expect("f32 tensor data extraction");
 
         // For each experience, compute target = reward + gamma * max_legal_q (if not done)
-        let mut target_data = Vec::with_capacity(batch_size);
+        self.buffers.target_data.clear();
         for i in 0..batch_size {
-            if dones[i] > 0.5 {
-                target_data.push(rewards[i]);
+            if self.buffers.dones[i] > 0.5 {
+                self.buffers.target_data.push(self.buffers.rewards[i]);
             } else {
                 // Find max Q over legal actions of next state
-                let legal = next_states[i].legal_actions();
+                let legal = self.buffers.next_states_buf[i].legal_actions();
                 let max_q = if legal.is_empty() {
                     0.0
                 } else {
@@ -180,12 +235,14 @@ impl DqnAgent {
                         .map(|&col| next_q_data[i * 7 + col])
                         .fold(f32::NEG_INFINITY, f32::max)
                 };
-                target_data.push(rewards[i] + self.config.gamma * max_q);
+                self.buffers
+                    .target_data
+                    .push(self.buffers.rewards[i] + self.config.gamma * max_q);
             }
         }
 
         let targets = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::from(target_data.as_slice()),
+            TensorData::from(self.buffers.target_data.as_slice()),
             &self.device,
         )
         .reshape([batch_size as i32, 1]);

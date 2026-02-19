@@ -44,6 +44,14 @@ impl ReplayBuffer {
         indices.iter().map(|i| self.buffer[i].clone()).collect()
     }
 
+    /// Sample a random batch into a pre-allocated Vec. Clears `out` first.
+    pub fn sample_into(&mut self, batch_size: usize, out: &mut Vec<Experience>) {
+        assert!(batch_size <= self.len, "Not enough experiences to sample");
+        let indices = index::sample(&mut self.rng, self.len, batch_size);
+        out.clear();
+        out.extend(indices.iter().map(|i| self.buffer[i].clone()));
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }

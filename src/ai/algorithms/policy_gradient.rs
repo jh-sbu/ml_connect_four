@@ -302,8 +302,8 @@ impl PolicyGradientAgent {
     /// Combined PPO update over multiple buffered episodes.
     /// GAE is computed per-episode independently to avoid cross-episode bleed.
     fn ppo_update_multi(&mut self, episodes: &[Vec<Experience>]) -> UpdateMetrics {
-        let mut red_rollouts: Vec<PlayerRolloutData> = Vec::new();
-        let mut yellow_rollouts: Vec<PlayerRolloutData> = Vec::new();
+        let mut red_rollouts: Vec<PlayerRolloutData> = Vec::with_capacity(episodes.len());
+        let mut yellow_rollouts: Vec<PlayerRolloutData> = Vec::with_capacity(episodes.len());
 
         for episode in episodes {
             let red_exps: Vec<&Experience> =

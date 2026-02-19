@@ -14,7 +14,8 @@ pub struct EpisodeTrace {
 /// Play one self-play episode. Agent plays both sides.
 pub fn play_self_play_episode(agent: &mut dyn Agent) -> EpisodeTrace {
     let mut state = GameState::initial();
-    let mut move_records: Vec<(GameState, usize, Player)> = Vec::new();
+    let mut move_records: Vec<(GameState, usize, Player)> =
+        Vec::with_capacity(crate::game::ROWS * crate::game::COLS);
 
     while !state.is_terminal() {
         let player = state.current_player();
@@ -53,7 +54,8 @@ pub fn play_self_play_episode_live(
     live_update_interval: usize,
 ) -> EpisodeTrace {
     let mut state = GameState::initial();
-    let mut move_records: Vec<(GameState, usize, Player)> = Vec::new();
+    let mut move_records: Vec<(GameState, usize, Player)> =
+        Vec::with_capacity(crate::game::ROWS * crate::game::COLS);
     let mut move_number = 0;
 
     while !state.is_terminal() {

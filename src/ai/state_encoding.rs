@@ -24,6 +24,21 @@ pub fn encode_states_batch<B: Backend>(states: &[GameState], device: &B::Device)
         .reshape([batch_size as i32, 3, 6, 7])
 }
 
+/// Like `encode_states_batch` but reuses a caller-provided flat buffer (no allocation).
+pub fn encode_states_batch_into<B: Backend>(
+    states: &[GameState],
+    flat_buf: &mut Vec<f32>,
+    device: &B::Device,
+) -> Tensor<B, 4> {
+    let batch_size = states.len();
+    flat_buf.clear();
+    for state in states {
+        flat_buf.extend_from_slice(&encode_state_flat(state));
+    }
+    Tensor::<B, 1>::from_data(TensorData::from(flat_buf.as_slice()), device)
+        .reshape([batch_size as i32, 3, 6, 7])
+}
+
 /// Produce the flat [126] f32 array for a single state encoding.
 fn encode_state_flat(state: &GameState) -> [f32; 3 * ROWS * COLS] {
     let mut data = [0.0f32; 3 * ROWS * COLS];
