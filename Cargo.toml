@@ -21,3 +21,8 @@ tempfile = "3"
 [[bin]]
 name = "train"
 path = "src/bin/train.rs"
+
+[profile.profiling]
+inherits = "release"
+debug = true        # retain DWARF symbols so perf/flamegraph maps to source lines
+codegen-units = 1   # single CGU → more aggressive inlining, reproducible output
