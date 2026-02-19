@@ -8,7 +8,7 @@ pub enum Cell {
     Yellow,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Board {
     cells: [[Cell; COLS]; ROWS],
 }

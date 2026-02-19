@@ -1,6 +1,6 @@
 use super::{Board, Player};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameOutcome {
     Winner(Player),
     Draw,
@@ -13,11 +13,10 @@ pub enum MoveError {
     GameOver,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GameState {
     board: Board,
     current_player: Player,
-    move_history: Vec<usize>,
     outcome: Option<GameOutcome>,
 }
 
@@ -27,7 +26,6 @@ impl GameState {
         GameState {
             board: Board::new(),
             current_player: Player::Red, // Red starts
-            move_history: Vec::new(),
             outcome: None,
         }
     }
@@ -87,14 +85,9 @@ impl GameState {
             None
         };
 
-        // Create new state
-        let mut new_history = self.move_history.clone();
-        new_history.push(column);
-
         Ok(GameState {
             board: new_board,
             current_player: self.current_player.other(),
-            move_history: new_history,
             outcome,
         })
     }
@@ -120,16 +113,11 @@ impl GameState {
             self.outcome = Some(GameOutcome::Draw);
         }
 
-        self.move_history.push(column);
         self.current_player = self.current_player.other();
 
         Ok(())
     }
 
-    /// Get move history
-    pub fn move_history(&self) -> &[usize] {
-        &self.move_history
-    }
 }
 
 #[cfg(test)]
@@ -152,7 +140,6 @@ mod tests {
 
         assert_eq!(new_state.current_player(), Player::Yellow);
         assert_eq!(new_state.board().get(5, 3), Cell::Red);
-        assert_eq!(new_state.move_history(), &[3]);
     }
 
     #[test]
