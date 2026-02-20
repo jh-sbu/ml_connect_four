@@ -36,6 +36,7 @@ pub struct PgHyperparameters {
     pub value_coeff: f32,
     pub ppo_epochs: usize,
     pub max_grad_norm: f32,
+    #[serde(default = "default_rollout_episodes")]
     pub rollout_episodes: usize,
 }
 
