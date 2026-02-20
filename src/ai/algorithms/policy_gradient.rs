@@ -688,6 +688,7 @@ impl TrainableAgent for PolicyGradientAgent {
                 max_grad_norm: ts.max_grad_norm,
                 rollout_episodes: ts.rollout_episodes,
             }),
+            az_hyperparameters: None,
         }
     }
 

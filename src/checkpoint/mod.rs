@@ -6,6 +6,6 @@ mod metadata;
 
 pub use manager::{AgentCheckpointData, CheckpointManager, CheckpointManagerConfig};
 pub use metadata::{
-    CheckpointHyperparameters, CheckpointMetadata, CheckpointMetrics, DqnTrainingState,
-    PgHyperparameters, PgTrainingState,
+    AlphaZeroHyperparameters, AlphaZeroTrainingState, CheckpointHyperparameters,
+    CheckpointMetadata, CheckpointMetrics, DqnTrainingState, PgHyperparameters, PgTrainingState,
 };

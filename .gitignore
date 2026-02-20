@@ -4,3 +4,4 @@ agent_plans/
 checkpoints/
 pg_checkpoints/
 agent_configs/
+az_checkpoints/

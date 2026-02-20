@@ -9,7 +9,7 @@ mod random;
 pub mod state_encoding;
 
 pub use agent::{Agent, AgentMetrics, AgentState, EvalState, Experience, TrainableAgent, UpdateMetrics};
-pub use algorithms::{DqnAgent, PgConfig, PolicyGradientAgent};
+pub use algorithms::{AlphaZeroAgent, AlphaZeroConfig, DqnAgent, PgConfig, PolicyGradientAgent};
 pub use negamax::{ConnectFourHeuristic, Heuristic, NegamaxAgent};
 pub use networks::{DqnNetwork, DqnNetworkConfig, PolicyValueNetwork, PolicyValueNetworkConfig};
 pub use random::RandomAgent;

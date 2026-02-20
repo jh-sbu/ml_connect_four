@@ -514,6 +514,7 @@ impl TrainableAgent for DqnAgent {
                 epsilon_decay_episodes: ts.epsilon_decay_episodes,
             },
             pg_hyperparameters: None,
+            az_hyperparameters: None,
         }
     }
 

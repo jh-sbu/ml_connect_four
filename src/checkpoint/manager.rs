@@ -309,6 +309,7 @@ mod tests {
                 epsilon_decay_episodes: 10000,
             },
             pg_hyperparameters: None,
+            az_hyperparameters: None,
         };
 
         let json = serde_json::to_string_pretty(&meta).unwrap();

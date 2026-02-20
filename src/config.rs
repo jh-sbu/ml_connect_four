@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::ai::algorithms::{DqnConfig, PgConfig};
+use crate::ai::algorithms::{AlphaZeroConfig, DqnConfig, PgConfig};
 use crate::checkpoint::CheckpointManagerConfig;
 use crate::error::ConfigError;
 use crate::training::trainer::TrainerConfig;
@@ -11,6 +11,7 @@ use crate::training::trainer::TrainerConfig;
 pub struct AppConfig {
     pub dqn: DqnConfig,
     pub pg: PgConfig,
+    pub az: AlphaZeroConfig,
     pub training: TrainerConfig,
     pub checkpoint: CheckpointManagerConfig,
 }
@@ -20,6 +21,7 @@ impl Default for AppConfig {
         AppConfig {
             dqn: DqnConfig::default(),
             pg: PgConfig::default(),
+            az: AlphaZeroConfig::default(),
             training: TrainerConfig::default(),
             checkpoint: CheckpointManagerConfig::default(),
         }
@@ -145,6 +147,53 @@ impl AppConfig {
                 "pg.rollout_episodes must be >= 1".into(),
             ));
         }
+        // AZ validations
+        if self.az.learning_rate <= 0.0 {
+            return Err(ConfigError::Validation(
+                "az.learning_rate must be > 0".into(),
+            ));
+        }
+        if self.az.num_simulations == 0 {
+            return Err(ConfigError::Validation(
+                "az.num_simulations must be >= 1".into(),
+            ));
+        }
+        if self.az.c_puct <= 0.0 {
+            return Err(ConfigError::Validation(
+                "az.c_puct must be > 0".into(),
+            ));
+        }
+        if self.az.batch_size == 0 {
+            return Err(ConfigError::Validation(
+                "az.batch_size must be > 0".into(),
+            ));
+        }
+        if self.az.replay_capacity < self.az.batch_size {
+            return Err(ConfigError::Validation(
+                "az.replay_capacity must be >= az.batch_size".into(),
+            ));
+        }
+        if self.az.min_replay_size < self.az.batch_size {
+            return Err(ConfigError::Validation(
+                "az.min_replay_size must be >= az.batch_size".into(),
+            ));
+        }
+        if self.az.dirichlet_epsilon <= 0.0 || self.az.dirichlet_epsilon >= 1.0 {
+            return Err(ConfigError::Validation(
+                "az.dirichlet_epsilon must be in (0, 1)".into(),
+            ));
+        }
+        if self.az.value_weight < 0.0 {
+            return Err(ConfigError::Validation(
+                "az.value_weight must be >= 0".into(),
+            ));
+        }
+        if self.az.max_grad_norm <= 0.0 {
+            return Err(ConfigError::Validation(
+                "az.max_grad_norm must be > 0".into(),
+            ));
+        }
+
         if self.training.live_update_interval == 0 {
             return Err(ConfigError::Validation(
                 "training.live_update_interval must be > 0".into(),

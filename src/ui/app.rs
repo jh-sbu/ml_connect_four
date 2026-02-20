@@ -1,4 +1,4 @@
-use crate::ai::algorithms::{DqnAgent, DqnConfig, PgConfig, PolicyGradientAgent};
+use crate::ai::algorithms::{AlphaZeroAgent, AlphaZeroConfig, DqnAgent, DqnConfig, PgConfig, PolicyGradientAgent};
 use crate::ai::{Agent, NegamaxAgent, RandomAgent, TrainableAgent};
 use crate::checkpoint::{CheckpointManager, CheckpointManagerConfig};
 use crate::game::{GameOutcome, GameState, MoveError, Player};
@@ -13,15 +13,17 @@ pub enum PlayerType {
     DqnAi,
     PgAi,
     NegamaxAi,
+    AlphaZeroAi,
 }
 
 impl PlayerType {
-    pub const ALL: [PlayerType; 5] = [
+    pub const ALL: [PlayerType; 6] = [
         Self::Human,
         Self::RandomAi,
         Self::DqnAi,
         Self::PgAi,
         Self::NegamaxAi,
+        Self::AlphaZeroAi,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -31,6 +33,7 @@ impl PlayerType {
             Self::DqnAi => "DQN AI",
             Self::PgAi => "Policy Gradient AI",
             Self::NegamaxAi => "Negamax AI",
+            Self::AlphaZeroAi => "AlphaZero AI",
         }
     }
 }
@@ -294,6 +297,7 @@ impl App {
                 "DQN" => PlayerType::DqnAi,
                 "PG" => PlayerType::PgAi,
                 "Negamax" => PlayerType::NegamaxAi,
+                "AZ" => PlayerType::AlphaZeroAi,
                 _ => PlayerType::Human,
             },
         }
@@ -347,6 +351,22 @@ impl App {
             PlayerType::NegamaxAi => {
                 self.message = Some("Negamax AI (depth 7)".to_string());
                 PlayerKind::Ai(Box::new(NegamaxAgent::new(7)))
+            }
+            PlayerType::AlphaZeroAi => {
+                let mut agent = AlphaZeroAgent::new(AlphaZeroConfig::default());
+                let manager = CheckpointManager::new(CheckpointManagerConfig {
+                    checkpoint_dir: std::path::PathBuf::from("az_checkpoints"),
+                    ..Default::default()
+                });
+                let load_msg = match manager.load_agent_latest() {
+                    Ok(data) => match agent.load_weights_from_dir(&data.path) {
+                        Ok(()) => format!("AZ loaded (episode {})", data.metadata.episode),
+                        Err(_) => "AZ (failed to load checkpoint)".to_string(),
+                    },
+                    Err(_) => "AZ (untrained, no checkpoint)".to_string(),
+                };
+                self.message = Some(load_msg);
+                PlayerKind::Ai(Box::new(agent))
             }
         }
     }
@@ -794,21 +814,22 @@ mod tests {
             AppMode::SelectingPlayer { cursor: 0, .. }
         ));
 
-        // Move to last item (index 4)
+        // Move to last item (index 5)
+        app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         assert!(matches!(
             app.mode,
-            AppMode::SelectingPlayer { cursor: 4, .. }
+            AppMode::SelectingPlayer { cursor: 5, .. }
         ));
 
-        // Down should stay at 4
+        // Down should stay at 5
         app.handle_key(KeyEvent::from(KeyCode::Down));
         assert!(matches!(
             app.mode,
-            AppMode::SelectingPlayer { cursor: 4, .. }
+            AppMode::SelectingPlayer { cursor: 5, .. }
         ));
     }
 
@@ -929,7 +950,8 @@ mod tests {
     #[test]
     fn player_type_all_contains_negamax() {
         assert!(PlayerType::ALL.contains(&PlayerType::NegamaxAi));
-        assert_eq!(PlayerType::ALL.len(), 5);
+        assert!(PlayerType::ALL.contains(&PlayerType::AlphaZeroAi));
+        assert_eq!(PlayerType::ALL.len(), 6);
     }
 
     #[test]

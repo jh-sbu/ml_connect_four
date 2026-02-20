@@ -40,6 +40,46 @@ pub struct PgHyperparameters {
     pub rollout_episodes: usize,
 }
 
+/// AlphaZero-specific hyperparameters recorded in checkpoint metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlphaZeroHyperparameters {
+    pub learning_rate: f64,
+    pub num_simulations: usize,
+    pub eval_simulations: usize,
+    pub c_puct: f32,
+    pub dirichlet_alpha: f32,
+    pub dirichlet_epsilon: f32,
+    pub temperature_moves: usize,
+    pub temperature: f32,
+    pub temperature_final: f32,
+    pub batch_size: usize,
+    pub replay_capacity: usize,
+    pub min_replay_size: usize,
+    pub value_weight: f32,
+    pub max_grad_norm: f32,
+}
+
+/// AlphaZero-specific training state written to training_state.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlphaZeroTrainingState {
+    pub episode_count: usize,
+    pub step_count: usize,
+    pub learning_rate: f64,
+    pub num_simulations: usize,
+    pub eval_simulations: usize,
+    pub c_puct: f32,
+    pub dirichlet_alpha: f32,
+    pub dirichlet_epsilon: f32,
+    pub temperature_moves: usize,
+    pub temperature: f32,
+    pub temperature_final: f32,
+    pub batch_size: usize,
+    pub replay_capacity: usize,
+    pub min_replay_size: usize,
+    pub value_weight: f32,
+    pub max_grad_norm: f32,
+}
+
 /// Top-level checkpoint metadata written to metadata.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointMetadata {
@@ -50,6 +90,8 @@ pub struct CheckpointMetadata {
     pub hyperparameters: CheckpointHyperparameters,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pg_hyperparameters: Option<PgHyperparameters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub az_hyperparameters: Option<AlphaZeroHyperparameters>,
 }
 
 /// DQN-specific training state written to training_state.json.

@@ -15,7 +15,7 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use ml_connect_four::ai::algorithms::{DqnAgent, PolicyGradientAgent};
+use ml_connect_four::ai::algorithms::{AlphaZeroAgent, DqnAgent, PolicyGradientAgent};
 use ml_connect_four::ai::TrainableAgent;
 use ml_connect_four::checkpoint::{CheckpointManager, CheckpointManagerConfig};
 use ml_connect_four::config::AppConfig;
@@ -58,8 +58,8 @@ fn main() -> Result<()> {
 
     // Validate algorithm
     match cli.algorithm.as_str() {
-        "dqn" | "pg" => {}
-        other => bail!("unknown algorithm '{}' (expected 'dqn' or 'pg')", other),
+        "dqn" | "pg" | "az" => {}
+        other => bail!("unknown algorithm '{}' (expected 'dqn', 'pg', or 'az')", other),
     }
 
     // Load configuration
@@ -74,13 +74,16 @@ fn main() -> Result<()> {
         match cli.algorithm.as_str() {
             "dqn" => app_config.dqn.learning_rate = lr,
             "pg" => app_config.pg.learning_rate = lr,
+            "az" => app_config.az.learning_rate = lr,
             _ => {}
         }
     }
 
-    // Use algorithm-appropriate checkpoint dir for PG
-    if cli.algorithm == "pg" {
-        app_config.training.checkpoint_dir = PathBuf::from("pg_checkpoints");
+    // Use algorithm-appropriate checkpoint directory.
+    match cli.algorithm.as_str() {
+        "pg" => app_config.training.checkpoint_dir = PathBuf::from("pg_checkpoints"),
+        "az" => app_config.training.checkpoint_dir = PathBuf::from("az_checkpoints"),
+        _ => {}
     }
 
     let trainer_config = app_config.training.clone();
@@ -102,6 +105,19 @@ fn main() -> Result<()> {
         }
         "pg" => {
             let mut agent = PolicyGradientAgent::new(app_config.pg.clone());
+            if cli.resume {
+                resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
+            }
+            if cli.headless {
+                let trainer = Trainer::new(trainer_config);
+                trainer.train(&mut agent);
+                Ok(())
+            } else {
+                run_dashboard(agent, trainer_config, total_episodes)
+            }
+        }
+        "az" => {
+            let mut agent = AlphaZeroAgent::new(app_config.az.clone());
             if cli.resume {
                 resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
             }
