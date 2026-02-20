@@ -119,7 +119,10 @@ impl Trainer {
             let needs_eval = ep % self.config.eval_interval == 0;
             let needs_checkpoint = ep % self.config.checkpoint_interval == 0;
             let eval_wr = if needs_eval || needs_checkpoint {
-                Some(self.do_evaluate(agent))
+                let t0 = std::time::Instant::now();
+                let wr = Some(self.do_evaluate(agent));
+                timing.record_overhead(t0.elapsed());
+                wr
             } else {
                 None
             };
@@ -141,6 +144,7 @@ impl Trainer {
                     current_loss: metrics.average_loss(window),
                     training_steps: agent.step_count(),
                 };
+                let t0 = std::time::Instant::now();
                 match self
                     .checkpoint_manager
                     .save_agent_checkpoint(agent, &ckpt_metrics, ep)
@@ -148,6 +152,7 @@ impl Trainer {
                     Ok(path) => println!("  >> Checkpoint saved: {}", path.display()),
                     Err(e) => eprintln!("  >> Checkpoint failed: {}", e),
                 }
+                timing.record_overhead(t0.elapsed());
             }
         }
 
@@ -199,7 +204,9 @@ impl Trainer {
             while let Ok(cmd) = cmd_rx.try_recv() {
                 match cmd {
                     TrainingCommand::SaveCheckpoint => {
+                        let t0 = std::time::Instant::now();
                         self.save_checkpoint_with_tx(agent, &metrics, ep, &tx);
+                        timing.record_overhead(t0.elapsed());
                     }
                 }
             }
@@ -255,7 +262,10 @@ impl Trainer {
             let needs_eval = ep % self.config.eval_interval == 0;
             let needs_checkpoint = ep % self.config.checkpoint_interval == 0;
             let eval_wr = if needs_eval || needs_checkpoint {
-                Some(self.do_evaluate(agent))
+                let t0 = std::time::Instant::now();
+                let wr = Some(self.do_evaluate(agent));
+                timing.record_overhead(t0.elapsed());
+                wr
             } else {
                 None
             };
@@ -268,9 +278,11 @@ impl Trainer {
             }
 
             if needs_checkpoint {
+                let t0 = std::time::Instant::now();
                 self.save_checkpoint_with_tx_precomputed(
                     agent, &metrics, ep, eval_wr.unwrap(), &tx,
                 );
+                timing.record_overhead(t0.elapsed());
             }
         }
 

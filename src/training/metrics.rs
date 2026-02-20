@@ -121,6 +121,7 @@ pub struct TimingMetrics {
     capacity: usize,
     window_start: std::time::Instant,
     window_count: usize,
+    window_overhead_micros: u128, // eval/checkpoint time excluded from throughput
 }
 
 impl TimingMetrics {
@@ -131,6 +132,7 @@ impl TimingMetrics {
             capacity,
             window_start: std::time::Instant::now(),
             window_count: 0,
+            window_overhead_micros: 0,
         }
     }
 
@@ -151,6 +153,12 @@ impl TimingMetrics {
         if self.update_micros.len() > self.capacity {
             self.update_micros.pop_front();
         }
+    }
+
+    /// Record time spent in eval or checkpoint saving so it is excluded from
+    /// the throughput window.
+    pub fn record_overhead(&mut self, d: std::time::Duration) {
+        self.window_overhead_micros += d.as_micros();
     }
 
     /// Mean of the last `last_n` episode times in milliseconds.
@@ -187,19 +195,22 @@ impl TimingMetrics {
         (mean / 1000.0) as f32
     }
 
-    /// Episodes per second since the last `reset_window` call.
+    /// Episodes per second since the last `reset_window` call, excluding time
+    /// spent in eval/checkpoint overhead.
     pub fn episodes_per_sec(&self) -> f32 {
-        let secs = self.window_start.elapsed().as_secs_f32();
-        if secs == 0.0 {
+        let total_micros = self.window_start.elapsed().as_micros();
+        let net_micros = total_micros.saturating_sub(self.window_overhead_micros);
+        if net_micros == 0 {
             return 0.0;
         }
-        self.window_count as f32 / secs
+        self.window_count as f32 / (net_micros as f32 / 1_000_000.0)
     }
 
     /// Reset the throughput window (call after each log interval).
     pub fn reset_window(&mut self) {
         self.window_start = std::time::Instant::now();
         self.window_count = 0;
+        self.window_overhead_micros = 0;
     }
 }
 
@@ -298,5 +309,33 @@ mod tests {
         // After some real elapsed time it should definitely be positive
         std::thread::sleep(std::time::Duration::from_millis(5));
         assert!(t.episodes_per_sec() > 0.0);
+    }
+
+    #[test]
+    fn test_overhead_excluded_from_eps_per_sec() {
+        let mut t = TimingMetrics::new();
+        for _ in 0..10 {
+            t.record_episode_time(std::time::Duration::from_micros(1000));
+        }
+        // Overhead larger than any possible real elapsed time → net_micros = 0
+        t.record_overhead(std::time::Duration::from_secs(9999));
+        assert_eq!(t.episodes_per_sec(), 0.0);
+    }
+
+    #[test]
+    fn test_reset_window_clears_overhead() {
+        let mut t = TimingMetrics::new();
+        for _ in 0..5 {
+            t.record_episode_time(std::time::Duration::from_micros(1000));
+        }
+        t.record_overhead(std::time::Duration::from_secs(9999));
+        assert_eq!(t.episodes_per_sec(), 0.0);
+
+        t.reset_window();
+        for _ in 0..5 {
+            t.record_episode_time(std::time::Duration::from_micros(1000));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(t.episodes_per_sec() > 0.0, "overhead should be cleared after reset");
     }
 }
