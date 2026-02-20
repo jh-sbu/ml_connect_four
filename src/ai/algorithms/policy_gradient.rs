@@ -16,9 +16,9 @@ use rand::SeedableRng;
 use crate::ai::agent::{Agent, AgentMetrics, EvalState, Experience, TrainableAgent, UpdateMetrics};
 use crate::checkpoint::{CheckpointHyperparameters, CheckpointMetadata, PgHyperparameters};
 use crate::ai::networks::{PolicyValueNetwork, PolicyValueNetworkConfig};
-use crate::ai::state_encoding::{encode_state, encode_states_batch};
+use crate::ai::state_encoding::{encode_state, encode_states_batch_into};
 use crate::checkpoint::PgTrainingState;
-use crate::game::{GameState, Player};
+use crate::game::{GameState, Player, ROWS, COLS};
 
 type InferBackend = Wgpu<f32, i32>;
 type TrainBackend = Autodiff<InferBackend>;
@@ -63,6 +63,34 @@ struct PlayerRolloutData {
     old_log_probs: Vec<f32>,
 }
 
+/// Pre-allocated working buffers for PG training updates.
+struct PgTrainBuffers {
+    states: Vec<GameState>,
+    actions: Vec<usize>,
+    advantages: Vec<f32>,
+    returns: Vec<f32>,
+    old_log_probs: Vec<f32>,
+    action_mask_data: Vec<f32>,
+    legal_mask_data: Vec<f32>,
+    flat_encode: Vec<f32>, // capacity: max_batch * 3 * ROWS * COLS
+}
+
+impl PgTrainBuffers {
+    fn new(rollout_episodes: usize) -> Self {
+        let cap = rollout_episodes * 21; // 21 = ceil(42 moves / 2 players)
+        PgTrainBuffers {
+            states: Vec::with_capacity(cap),
+            actions: Vec::with_capacity(cap),
+            advantages: Vec::with_capacity(cap),
+            returns: Vec::with_capacity(cap),
+            old_log_probs: Vec::with_capacity(cap),
+            action_mask_data: Vec::with_capacity(cap * 7),
+            legal_mask_data: Vec::with_capacity(cap * 7),
+            flat_encode: Vec::with_capacity(cap * 3 * ROWS * COLS),
+        }
+    }
+}
+
 /// Policy Gradient agent with PPO clipping and GAE.
 pub struct PolicyGradientAgent {
     network: PolicyValueNetwork<TrainBackend>,
@@ -75,6 +103,7 @@ pub struct PolicyGradientAgent {
     last_entropy: Option<f32>,
     rng: StdRng,
     episode_buffer: Vec<Vec<Experience>>,
+    buffers: PgTrainBuffers,
 }
 
 impl PolicyGradientAgent {
@@ -86,6 +115,7 @@ impl PolicyGradientAgent {
             .with_grad_clipping(Some(GradientClippingConfig::Norm(config.max_grad_norm)))
             .init();
 
+        let rollout_episodes = config.rollout_episodes;
         PolicyGradientAgent {
             network,
             optimizer,
@@ -96,6 +126,7 @@ impl PolicyGradientAgent {
             last_entropy: None,
             rng: StdRng::from_os_rng(),
             episode_buffer: Vec::new(),
+            buffers: PgTrainBuffers::new(rollout_episodes),
         }
     }
 
@@ -132,7 +163,7 @@ impl PolicyGradientAgent {
 
     /// Compute pre-processed rollout data for one player's sub-trajectory in one episode.
     /// GAE is computed within this single episode's trace (no cross-episode bleed).
-    fn compute_player_rollout_data(&self, exps: &[&Experience]) -> PlayerRolloutData {
+    fn compute_player_rollout_data(&mut self, exps: &[&Experience]) -> PlayerRolloutData {
         let values = self.compute_values_no_grad(exps);
         let (advantages, returns) = self.compute_gae(exps, &values);
         let old_log_probs = self.compute_log_probs_no_grad(exps);
@@ -143,76 +174,84 @@ impl PolicyGradientAgent {
 
     /// PPO update over a concatenated batch of per-episode player rollouts.
     fn ppo_update_for_player_from_data(&mut self, rollouts: &[PlayerRolloutData]) -> (f32, f32) {
-        let mut states: Vec<GameState> = Vec::new();
-        let mut actions: Vec<usize> = Vec::new();
-        let mut advantages: Vec<f32> = Vec::new();
-        let mut returns: Vec<f32> = Vec::new();
-        let mut old_log_probs: Vec<f32> = Vec::new();
+        self.buffers.states.clear();
+        self.buffers.actions.clear();
+        self.buffers.advantages.clear();
+        self.buffers.returns.clear();
+        self.buffers.old_log_probs.clear();
 
         for rollout in rollouts {
-            states.extend_from_slice(&rollout.states);
-            actions.extend_from_slice(&rollout.actions);
-            advantages.extend_from_slice(&rollout.advantages);
-            returns.extend_from_slice(&rollout.returns);
-            old_log_probs.extend_from_slice(&rollout.old_log_probs);
+            self.buffers.states.extend_from_slice(&rollout.states);
+            self.buffers.actions.extend_from_slice(&rollout.actions);
+            self.buffers.advantages.extend_from_slice(&rollout.advantages);
+            self.buffers.returns.extend_from_slice(&rollout.returns);
+            self.buffers.old_log_probs.extend_from_slice(&rollout.old_log_probs);
         }
 
-        let n = states.len();
+        let n = self.buffers.states.len();
         if n == 0 {
             return (0.0, 0.0);
         }
 
         // Re-normalize advantages across the full concatenated batch for better statistics
         if n > 1 {
-            let mean: f32 = advantages.iter().sum::<f32>() / n as f32;
+            let mean: f32 = self.buffers.advantages.iter().sum::<f32>() / n as f32;
             let var: f32 =
-                advantages.iter().map(|a| (a - mean).powi(2)).sum::<f32>() / n as f32;
+                self.buffers.advantages.iter().map(|a| (a - mean).powi(2)).sum::<f32>() / n as f32;
             let std = var.sqrt().max(1e-8);
-            for a in &mut advantages {
+            for a in &mut self.buffers.advantages {
                 *a = (*a - mean) / std;
             }
         }
 
         // Pre-compute masks (constant across PPO epochs)
-        let mut action_mask_data = vec![0.0f32; n * 7];
-        for (i, &action) in actions.iter().enumerate() {
-            action_mask_data[i * 7 + action] = 1.0;
+        self.buffers.action_mask_data.resize(n * 7, 0.0f32);
+        self.buffers.action_mask_data.fill(0.0f32);
+        for (i, &action) in self.buffers.actions.iter().enumerate() {
+            self.buffers.action_mask_data[i * 7 + action] = 1.0;
         }
-        let mut legal_mask_data = vec![-1e9f32; n * 7];
-        for (i, state) in states.iter().enumerate() {
-            for &col in &state.legal_actions() {
-                legal_mask_data[i * 7 + col] = 0.0;
+
+        self.buffers.legal_mask_data.resize(n * 7, -1e9f32);
+        self.buffers.legal_mask_data.fill(-1e9f32);
+        for i in 0..n {
+            let legal = self.buffers.states[i].legal_actions();
+            for &col in &legal {
+                self.buffers.legal_mask_data[i * 7 + col] = 0.0;
             }
         }
 
         // Encode all states once directly on GPU (no CPU roundtrip)
-        let state_tensor_base = encode_states_batch::<TrainBackend>(&states, &self.device);
+        let state_tensor_base = encode_states_batch_into::<TrainBackend>(
+            &self.buffers.states,
+            &mut self.buffers.flat_encode,
+            &self.device,
+        );
 
         // Pre-compute constant tensors (hoisted out of PPO loop; clone is shallow/Arc)
         let action_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::from(action_mask_data.as_slice()),
+            TensorData::from(self.buffers.action_mask_data.as_slice()),
             &self.device,
         )
         .reshape([n as i32, 7]);
 
         let legal_mask_tensor = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::from(legal_mask_data.as_slice()),
+            TensorData::from(self.buffers.legal_mask_data.as_slice()),
             &self.device,
         )
         .reshape([n as i32, 7]);
 
         let old_lp_tensor = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::from(old_log_probs.as_slice()),
+            TensorData::from(self.buffers.old_log_probs.as_slice()),
             &self.device,
         );
 
         let adv_tensor = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::from(advantages.as_slice()),
+            TensorData::from(self.buffers.advantages.as_slice()),
             &self.device,
         );
 
         let returns_tensor = Tensor::<TrainBackend, 1>::from_data(
-            TensorData::from(returns.as_slice()),
+            TensorData::from(self.buffers.returns.as_slice()),
             &self.device,
         )
         .reshape([n as i32, 1]);
@@ -277,8 +316,8 @@ impl PolicyGradientAgent {
             // Compute entropy scalar for reporting (from detached data)
             let mut entropy_sum = 0.0f32;
             for i in 0..n {
-                let logits_i: Vec<f32> = (0..7).map(|j| logits_data[i * 7 + j]).collect();
-                let legal = states[i].legal_actions();
+                let logits_i: [f32; 7] = std::array::from_fn(|j| logits_data[i * 7 + j]);
+                let legal = self.buffers.states[i].legal_actions();
                 let (lp, pr) = masked_log_softmax(&logits_i, &legal);
                 entropy_sum += legal.iter().map(|&a| -pr[a] * lp[a]).sum::<f32>();
             }
@@ -347,12 +386,17 @@ impl PolicyGradientAgent {
     }
 
     /// Compute state values for experiences using inference network (no gradient).
-    fn compute_values_no_grad(&self, exps: &[&Experience]) -> Vec<f32> {
+    fn compute_values_no_grad(&mut self, exps: &[&Experience]) -> Vec<f32> {
         if exps.is_empty() {
             return Vec::new();
         }
-        let states: Vec<GameState> = exps.iter().map(|e| e.state.clone()).collect();
-        let state_batch = encode_states_batch::<InferBackend>(&states, &self.device);
+        self.buffers.states.clear();
+        self.buffers.states.extend(exps.iter().map(|e| e.state.clone()));
+        let state_batch = encode_states_batch_into::<InferBackend>(
+            &self.buffers.states,
+            &mut self.buffers.flat_encode,
+            &self.device,
+        );
         let infer_net = self.network.valid();
         let (_logits, values_batch) = infer_net.forward(state_batch);
         values_batch
@@ -363,12 +407,17 @@ impl PolicyGradientAgent {
     }
 
     /// Compute log probabilities of taken actions (no gradient).
-    fn compute_log_probs_no_grad(&self, exps: &[&Experience]) -> Vec<f32> {
+    fn compute_log_probs_no_grad(&mut self, exps: &[&Experience]) -> Vec<f32> {
         if exps.is_empty() {
             return Vec::new();
         }
-        let states: Vec<GameState> = exps.iter().map(|e| e.state.clone()).collect();
-        let state_batch = encode_states_batch::<InferBackend>(&states, &self.device);
+        self.buffers.states.clear();
+        self.buffers.states.extend(exps.iter().map(|e| e.state.clone()));
+        let state_batch = encode_states_batch_into::<InferBackend>(
+            &self.buffers.states,
+            &mut self.buffers.flat_encode,
+            &self.device,
+        );
         let infer_net = self.network.valid();
         let (logits_batch, _) = infer_net.forward(state_batch);
         let logits_data: Vec<f32> = logits_batch
@@ -378,7 +427,7 @@ impl PolicyGradientAgent {
 
         let mut log_probs = Vec::with_capacity(exps.len());
         for (i, exp) in exps.iter().enumerate() {
-            let logits_i: Vec<f32> = (0..7).map(|j| logits_data[i * 7 + j]).collect();
+            let logits_i: [f32; 7] = std::array::from_fn(|j| logits_data[i * 7 + j]);
             let legal = exp.state.legal_actions();
             let (lp, _) = masked_log_softmax(&logits_i, &legal);
             log_probs.push(lp[exp.action]);
@@ -661,24 +710,21 @@ impl TrainableAgent for PolicyGradientAgent {
 }
 
 /// Apply legal action mask and compute softmax probabilities.
-fn masked_softmax(logits: &[f32], legal: &[usize]) -> Vec<f32> {
-    let mut masked = vec![f32::NEG_INFINITY; logits.len()];
+fn masked_softmax(logits: &[f32], legal: &[usize]) -> [f32; 7] {
+    let mut masked = [f32::NEG_INFINITY; 7];
     for &col in legal {
         masked[col] = logits[col];
     }
 
     // Numerically stable softmax
-    let max_val = masked
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let max_val = masked.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 
     // Guard against NaN logits: fall back to uniform over legal actions
     if !max_val.is_finite() {
-        return uniform_over_legal(logits.len(), legal);
+        return uniform_over_legal(legal);
     }
 
-    let mut probs = vec![0.0f32; logits.len()];
+    let mut probs = [0.0f32; 7];
     let mut sum = 0.0f32;
     for (i, &m) in masked.iter().enumerate() {
         let v = (m - max_val).exp();
@@ -687,7 +733,7 @@ fn masked_softmax(logits: &[f32], legal: &[usize]) -> Vec<f32> {
     }
 
     if !sum.is_finite() || sum == 0.0 {
-        return uniform_over_legal(logits.len(), legal);
+        return uniform_over_legal(legal);
     }
 
     for p in &mut probs {
@@ -698,8 +744,8 @@ fn masked_softmax(logits: &[f32], legal: &[usize]) -> Vec<f32> {
 }
 
 /// Return a uniform probability distribution over legal actions.
-fn uniform_over_legal(n: usize, legal: &[usize]) -> Vec<f32> {
-    let mut probs = vec![0.0f32; n];
+fn uniform_over_legal(legal: &[usize]) -> [f32; 7] {
+    let mut probs = [0.0f32; 7];
     let p = 1.0 / legal.len() as f32;
     for &col in legal {
         probs[col] = p;
@@ -708,12 +754,12 @@ fn uniform_over_legal(n: usize, legal: &[usize]) -> Vec<f32> {
 }
 
 /// Compute masked log-softmax. Returns (log_probs, probs).
-fn masked_log_softmax(logits: &[f32], legal: &[usize]) -> (Vec<f32>, Vec<f32>) {
+fn masked_log_softmax(logits: &[f32], legal: &[usize]) -> ([f32; 7], [f32; 7]) {
     let probs = masked_softmax(logits, legal);
-    let log_probs: Vec<f32> = probs
-        .iter()
-        .map(|&p| if p > 0.0 { p.ln() } else { -1e9 })
-        .collect();
+    let mut log_probs = [0.0f32; 7];
+    for (i, &p) in probs.iter().enumerate() {
+        log_probs[i] = if p > 0.0 { p.ln() } else { -1e9 };
+    }
     (log_probs, probs)
 }
 
