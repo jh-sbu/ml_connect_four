@@ -691,32 +691,91 @@ impl TrainableAgent for AlphaZeroAgent {
     }
 
     fn clone_for_eval(&self) -> Box<dyn Agent + Send> {
-        Box::new(AzEvalAgent {
+        Box::new(AzMctsEvalAgent {
             network: self.network.clone().valid(),
             device: self.device.clone(),
+            config: self.config.clone(),
+            tree: MctsTree::new(),
+            rng: StdRng::from_os_rng(),
         })
     }
 }
 
-// ─── Inference-only eval agent (for parallel evaluation) ─────────────────────
+// ─── MCTS eval agent (for parallel evaluation) ───────────────────────────────
 
-/// Greedy policy-only agent used for fast parallel evaluation during training.
-struct AzEvalAgent {
+/// MCTS-based agent using `InferBackend` — mirrors single-threaded eval behaviour.
+struct AzMctsEvalAgent {
     network: PolicyValueNetwork<InferBackend>,
     device: <InferBackend as Backend>::Device,
+    config: AlphaZeroConfig,
+    tree: MctsTree,
+    rng: StdRng,
 }
 
-impl Agent for AzEvalAgent {
-    fn select_action(&mut self, state: &GameState, _training: bool) -> usize {
+impl AzMctsEvalAgent {
+    /// Run a single MCTS simulation using the inference-mode network.
+    fn run_simulation_infer(&mut self, root_idx: usize) {
+        let mut path = Vec::new();
+        let mut current = root_idx;
+
+        loop {
+            if self.tree.nodes[current].state.is_terminal() {
+                let value = terminal_value(&self.tree.nodes[current].state);
+                path.push(current);
+                self.tree.backup(&path, value);
+                return;
+            }
+
+            if !self.tree.nodes[current].is_expanded {
+                let state_clone = self.tree.nodes[current].state.clone();
+                let (policy, value) =
+                    eval_state_infer(&self.network, &self.device, &state_clone);
+                self.tree.expand(current, &policy);
+                path.push(current);
+                self.tree.backup(&path, value);
+                return;
+            }
+
+            path.push(current);
+            let action = self.tree.select_best_child(current, self.config.c_puct);
+            if action >= 7 {
+                self.tree.backup(&path, 0.0);
+                return;
+            }
+            let child_raw = self.tree.nodes[current].children[action];
+            if child_raw < 0 {
+                self.tree.backup(&path, 0.0);
+                return;
+            }
+            current = child_raw as usize;
+        }
+    }
+
+    /// Run MCTS and return the greedy best action (no temperature, no Dirichlet noise).
+    fn mcts_search_infer(&mut self, state: &GameState) -> usize {
+        self.tree.init(state.clone());
+        let num_sims = self.config.eval_simulations.max(1);
+
+        for _ in 0..num_sims {
+            self.run_simulation_infer(0);
+        }
+
         let legal = state.legal_actions();
-        assert!(!legal.is_empty(), "No legal actions");
-        let t = encode_state::<InferBackend>(state, &self.device).unsqueeze::<4>();
-        let (logits, _) = self.network.forward(t);
-        let v: Vec<f32> = logits.into_data().to_vec().expect("f32 logits");
-        *legal
-            .iter()
-            .max_by(|&&a, &&b| v[a].partial_cmp(&v[b]).unwrap_or(Ordering::Equal))
-            .unwrap()
+        let mut visit_counts = [0u32; 7];
+        for action in 0..7 {
+            let ci = self.tree.nodes[0].children[action];
+            if ci >= 0 {
+                visit_counts[action] = self.tree.nodes[ci as usize].visit_count;
+            }
+        }
+
+        *legal.iter().max_by_key(|&&a| visit_counts[a]).unwrap()
+    }
+}
+
+impl Agent for AzMctsEvalAgent {
+    fn select_action(&mut self, state: &GameState, _training: bool) -> usize {
+        self.mcts_search_infer(state)
     }
 
     fn name(&self) -> &str {
@@ -725,6 +784,20 @@ impl Agent for AzEvalAgent {
 }
 
 // ─── Free functions ───────────────────────────────────────────────────────────
+
+/// Evaluate a state with an inference-mode network (no grad).
+fn eval_state_infer(
+    network: &PolicyValueNetwork<InferBackend>,
+    device: &<InferBackend as Backend>::Device,
+    state: &GameState,
+) -> ([f32; 7], f32) {
+    let t = encode_state::<InferBackend>(state, device).unsqueeze::<4>();
+    let (logits, value_t) = network.forward(t);
+    let logits_vec: Vec<f32> = logits.into_data().to_vec().expect("f32 logits");
+    let raw_value = value_t.into_data().to_vec::<f32>().expect("f32 value")[0];
+    let policy = masked_softmax_7(&logits_vec, &state.legal_actions());
+    (policy, raw_value.tanh())
+}
 
 /// Evaluate a state with the network (inference only, no grad).
 ///
@@ -735,12 +808,8 @@ fn eval_state(
     device: &<TrainBackend as Backend>::Device,
     state: &GameState,
 ) -> ([f32; 7], f32) {
-    let t = encode_state::<InferBackend>(state, device).unsqueeze::<4>();
-    let (logits, value_t) = network.valid().forward(t);
-    let logits_vec: Vec<f32> = logits.into_data().to_vec().expect("f32 logits");
-    let raw_value = value_t.into_data().to_vec::<f32>().expect("f32 value")[0];
-    let policy = masked_softmax_7(&logits_vec, &state.legal_actions());
-    (policy, raw_value.tanh())
+    let infer = network.valid();
+    eval_state_infer(&infer, device, state)
 }
 
 /// Terminal state value from the perspective of the node's current player.
