@@ -51,6 +51,10 @@ struct Cli {
     /// Override learning rate
     #[arg(long)]
     lr: Option<f64>,
+
+    /// Fix the random seed for reproducible training (overrides config base_seed)
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 fn main() -> Result<()> {
@@ -77,6 +81,9 @@ fn main() -> Result<()> {
             "az" => app_config.az.learning_rate = lr,
             _ => {}
         }
+    }
+    if let Some(seed) = cli.seed {
+        app_config.training.base_seed = Some(seed);
     }
 
     // Use algorithm-appropriate checkpoint directory.

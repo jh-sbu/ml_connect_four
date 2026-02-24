@@ -702,6 +702,10 @@ impl TrainableAgent for PolicyGradientAgent {
         Ok(())
     }
 
+    fn set_episode_seed(&mut self, seed: u64) {
+        self.rng = StdRng::seed_from_u64(seed);
+    }
+
     fn clone_for_eval(&self) -> Box<dyn Agent + Send> {
         Box::new(PgEvalAgent {
             network: self.network.clone().valid(),
