@@ -1,17 +1,17 @@
 use burn::nn::conv::{Conv2d, Conv2dConfig};
-use burn::nn::{Linear, LinearConfig, Relu};
+use burn::nn::{Linear, LinearConfig, PaddingConfig2d, Relu};
 use burn::prelude::*;
 
 /// DQN network architecture for Connect Four.
 ///
 /// ```text
 /// Input:  [batch, 3, 6, 7]
-/// Conv1:  3 -> 32 channels, 3x3 kernel  =>  [batch, 32, 4, 5]
+/// Conv1:  3 -> 32 channels, 3x3 kernel, same pad  =>  [batch, 32, 6, 7]
 /// ReLU
-/// Conv2:  32 -> 64 channels, 3x3 kernel =>  [batch, 64, 2, 3]
+/// Conv2:  32 -> 64 channels, 3x3 kernel, same pad =>  [batch, 64, 6, 7]
 /// ReLU
-/// Flatten: 64*2*3 = 384
-/// FC1:    384 -> 128, ReLU
+/// Flatten: 64*6*7 = 2688
+/// FC1:    2688 -> 128, ReLU
 /// FC2:    128 -> 7  (Q-values, one per column)
 /// ```
 #[derive(Module, Debug)]
@@ -29,9 +29,13 @@ pub struct DqnNetworkConfig {}
 impl DqnNetworkConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> DqnNetwork<B> {
         DqnNetwork {
-            conv1: Conv2dConfig::new([3, 32], [3, 3]).init(device),
-            conv2: Conv2dConfig::new([32, 64], [3, 3]).init(device),
-            fc1: LinearConfig::new(384, 128).init(device),
+            conv1: Conv2dConfig::new([3, 32], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            conv2: Conv2dConfig::new([32, 64], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            fc1: LinearConfig::new(2688, 128).init(device),
             fc2: LinearConfig::new(128, 7).init(device),
             relu: Relu::new(),
         }
@@ -45,7 +49,7 @@ impl<B: Backend> DqnNetwork<B> {
 
         let x = self.relu.forward(self.conv1.forward(input));
         let x = self.relu.forward(self.conv2.forward(x));
-        let x = x.reshape([batch_size as i32, 384]);
+        let x = x.reshape([batch_size as i32, 2688]);
         let x = self.relu.forward(self.fc1.forward(x));
         self.fc2.forward(x)
     }

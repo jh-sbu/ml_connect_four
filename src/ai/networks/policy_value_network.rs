@@ -1,5 +1,5 @@
 use burn::nn::conv::{Conv2d, Conv2dConfig};
-use burn::nn::{Linear, LinearConfig, Relu};
+use burn::nn::{Linear, LinearConfig, PaddingConfig2d, Relu};
 use burn::prelude::*;
 
 /// Combined policy-value network for Policy Gradient agent.
@@ -7,12 +7,12 @@ use burn::prelude::*;
 /// Shares the DQN conv backbone with dual output heads:
 /// ```text
 /// Input:  [batch, 3, 6, 7]
-/// Conv1:  3 -> 32 channels, 3x3 kernel  =>  [batch, 32, 4, 5]
+/// Conv1:  3 -> 32 channels, 3x3 kernel, same pad  =>  [batch, 32, 6, 7]
 /// ReLU
-/// Conv2:  32 -> 64 channels, 3x3 kernel =>  [batch, 64, 2, 3]
+/// Conv2:  32 -> 64 channels, 3x3 kernel, same pad =>  [batch, 64, 6, 7]
 /// ReLU
-/// Flatten: 64*2*3 = 384
-/// FC_shared: 384 -> 128, ReLU
+/// Flatten: 64*6*7 = 2688
+/// FC_shared: 2688 -> 128, ReLU
 /// Policy head: 128 -> 7  (logits, one per column)
 /// Value head:  128 -> 1  (state value estimate)
 /// ```
@@ -32,9 +32,13 @@ pub struct PolicyValueNetworkConfig {}
 impl PolicyValueNetworkConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> PolicyValueNetwork<B> {
         PolicyValueNetwork {
-            conv1: Conv2dConfig::new([3, 32], [3, 3]).init(device),
-            conv2: Conv2dConfig::new([32, 64], [3, 3]).init(device),
-            fc_shared: LinearConfig::new(384, 128).init(device),
+            conv1: Conv2dConfig::new([3, 32], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            conv2: Conv2dConfig::new([32, 64], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            fc_shared: LinearConfig::new(2688, 128).init(device),
             policy_head: LinearConfig::new(128, 7).init(device),
             value_head: LinearConfig::new(128, 1).init(device),
             relu: Relu::new(),
@@ -49,7 +53,7 @@ impl<B: Backend> PolicyValueNetwork<B> {
 
         let x = self.relu.forward(self.conv1.forward(input));
         let x = self.relu.forward(self.conv2.forward(x));
-        let x = x.reshape([batch_size as i32, 384]);
+        let x = x.reshape([batch_size as i32, 2688]);
         let x = self.relu.forward(self.fc_shared.forward(x));
 
         let logits = self.policy_head.forward(x.clone());
