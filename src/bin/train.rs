@@ -243,6 +243,11 @@ fn run_dashboard_ui(
                 TrainingUpdate::CheckpointSaved { episode, path } => {
                     dashboard.last_checkpoint =
                         Some(format!("ep {} ({})", episode, path.display()));
+                    dashboard.last_checkpoint_error = None;
+                }
+                TrainingUpdate::CheckpointFailed { episode, error } => {
+                    dashboard.last_checkpoint_error =
+                        Some(format!("ep {} failed: {}", episode, error));
                 }
                 TrainingUpdate::Finished => {
                     dashboard.status = TrainingStatus::Finished;

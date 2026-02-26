@@ -365,6 +365,16 @@ fn render_stats_panel(frame: &mut Frame, dashboard: &DashboardState, area: Rect)
         ]));
     }
 
+    if let Some(ref err) = dashboard.last_checkpoint_error {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Save Error: ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(err.clone(), Style::default().fg(Color::Red)),
+        ]));
+    }
+
     let stats = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)

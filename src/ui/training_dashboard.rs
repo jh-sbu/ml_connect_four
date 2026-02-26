@@ -45,6 +45,7 @@ pub struct DashboardState {
     // Status
     pub status: TrainingStatus,
     pub last_checkpoint: Option<String>,
+    pub last_checkpoint_error: Option<String>,
     pub last_eval_win_rate: Option<f32>,
 }
 
@@ -77,6 +78,7 @@ impl DashboardState {
 
             status: TrainingStatus::Running,
             last_checkpoint: None,
+            last_checkpoint_error: None,
             last_eval_win_rate: None,
         }
     }

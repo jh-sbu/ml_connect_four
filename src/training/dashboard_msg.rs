@@ -40,6 +40,10 @@ pub enum TrainingUpdate {
         episode: usize,
         path: PathBuf,
     },
+    CheckpointFailed {
+        episode: usize,
+        error: String,
+    },
     Finished,
 }
 

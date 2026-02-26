@@ -331,7 +331,12 @@ impl Trainer {
             Ok(path) => {
                 let _ = tx.send(TrainingUpdate::CheckpointSaved { episode, path });
             }
-            Err(_) => {}
+            Err(e) => {
+                let _ = tx.send(TrainingUpdate::CheckpointFailed {
+                    episode,
+                    error: e.to_string(),
+                });
+            }
         }
     }
 }
