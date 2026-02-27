@@ -127,32 +127,34 @@ impl Trainer {
                 None
             };
 
-            if needs_eval {
-                println!(
-                    "  >> Eval vs Random ({} games): {:.1}% win rate",
-                    self.config.eval_games,
-                    eval_wr.unwrap() * 100.0
-                );
-            }
-
-            if needs_checkpoint {
-                let window = self.config.log_interval;
-                let ckpt_metrics = CheckpointMetrics {
-                    win_rate: eval_wr.unwrap(),
-                    draw_rate: metrics.draw_rate(window),
-                    average_game_length: metrics.average_game_length(window),
-                    current_loss: metrics.average_loss(window),
-                    training_steps: agent.step_count(),
-                };
-                let t0 = std::time::Instant::now();
-                match self
-                    .checkpoint_manager
-                    .save_agent_checkpoint(agent, &ckpt_metrics, ep)
-                {
-                    Ok(path) => println!("  >> Checkpoint saved: {}", path.display()),
-                    Err(e) => eprintln!("  >> Checkpoint failed: {}", e),
+            if let Some(win_rate) = eval_wr {
+                if needs_eval {
+                    println!(
+                        "  >> Eval vs Random ({} games): {:.1}% win rate",
+                        self.config.eval_games,
+                        win_rate * 100.0
+                    );
                 }
-                timing.record_overhead(t0.elapsed());
+
+                if needs_checkpoint {
+                    let window = self.config.log_interval;
+                    let ckpt_metrics = CheckpointMetrics {
+                        win_rate,
+                        draw_rate: metrics.draw_rate(window),
+                        average_game_length: metrics.average_game_length(window),
+                        current_loss: metrics.average_loss(window),
+                        training_steps: agent.step_count(),
+                    };
+                    let t0 = std::time::Instant::now();
+                    match self
+                        .checkpoint_manager
+                        .save_agent_checkpoint(agent, &ckpt_metrics, ep)
+                    {
+                        Ok(path) => println!("  >> Checkpoint saved: {}", path.display()),
+                        Err(e) => eprintln!("  >> Checkpoint failed: {}", e),
+                    }
+                    timing.record_overhead(t0.elapsed());
+                }
             }
         }
 
@@ -270,19 +272,21 @@ impl Trainer {
                 None
             };
 
-            if needs_eval {
-                let _ = tx.send(TrainingUpdate::EvalResult {
-                    episode: ep,
-                    win_rate: eval_wr.unwrap(),
-                });
-            }
+            if let Some(win_rate) = eval_wr {
+                if needs_eval {
+                    let _ = tx.send(TrainingUpdate::EvalResult {
+                        episode: ep,
+                        win_rate,
+                    });
+                }
 
-            if needs_checkpoint {
-                let t0 = std::time::Instant::now();
-                self.save_checkpoint_with_tx_precomputed(
-                    agent, &metrics, ep, eval_wr.unwrap(), &tx,
-                );
-                timing.record_overhead(t0.elapsed());
+                if needs_checkpoint {
+                    let t0 = std::time::Instant::now();
+                    self.save_checkpoint_with_tx_precomputed(
+                        agent, &metrics, ep, win_rate, &tx,
+                    );
+                    timing.record_overhead(t0.elapsed());
+                }
             }
         }
 
