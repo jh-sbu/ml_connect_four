@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
-use clap::Parser;
+use anyhow::{Context, Result};
+use clap::{Parser, ValueEnum};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -24,13 +24,20 @@ use ml_connect_four::training::trainer::{Trainer, TrainerConfig};
 use ml_connect_four::ui::training_dashboard::{DashboardState, TrainingStatus};
 use ml_connect_four::ui::training_view;
 
+#[derive(ValueEnum, Clone, Debug)]
+enum Algorithm {
+    Dqn,
+    Pg,
+    Az,
+}
+
 /// Train a Connect Four RL agent via self-play.
 #[derive(Parser)]
 #[command(name = "train", about = "Train a Connect Four RL agent")]
 struct Cli {
-    /// Algorithm to train: dqn or pg
+    /// Algorithm to train
     #[arg(long, default_value = "dqn")]
-    algorithm: String,
+    algorithm: Algorithm,
 
     /// Resume training from the latest checkpoint
     #[arg(long)]
@@ -60,12 +67,6 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Validate algorithm
-    match cli.algorithm.as_str() {
-        "dqn" | "pg" | "az" => {}
-        other => bail!("unknown algorithm '{}' (expected 'dqn', 'pg', or 'az')", other),
-    }
-
     // Load configuration
     let mut app_config = AppConfig::load_or_default(&cli.config)
         .with_context(|| format!("loading config from {}", cli.config.display()))?;
@@ -75,11 +76,10 @@ fn main() -> Result<()> {
         app_config.training.num_episodes = episodes;
     }
     if let Some(lr) = cli.lr {
-        match cli.algorithm.as_str() {
-            "dqn" => app_config.dqn.learning_rate = lr,
-            "pg" => app_config.pg.learning_rate = lr,
-            "az" => app_config.az.learning_rate = lr,
-            _ => {}
+        match cli.algorithm {
+            Algorithm::Dqn => app_config.dqn.learning_rate = lr,
+            Algorithm::Pg => app_config.pg.learning_rate = lr,
+            Algorithm::Az => app_config.az.learning_rate = lr,
         }
     }
     if let Some(seed) = cli.seed {
@@ -87,17 +87,17 @@ fn main() -> Result<()> {
     }
 
     // Use algorithm-appropriate checkpoint directory.
-    match cli.algorithm.as_str() {
-        "pg" => app_config.training.checkpoint_dir = PathBuf::from("pg_checkpoints"),
-        "az" => app_config.training.checkpoint_dir = PathBuf::from("az_checkpoints"),
-        _ => {}
+    match cli.algorithm {
+        Algorithm::Pg => app_config.training.checkpoint_dir = PathBuf::from("pg_checkpoints"),
+        Algorithm::Az => app_config.training.checkpoint_dir = PathBuf::from("az_checkpoints"),
+        Algorithm::Dqn => {}
     }
 
     let trainer_config = app_config.training.clone();
     let total_episodes = trainer_config.num_episodes;
 
-    match cli.algorithm.as_str() {
-        "dqn" => {
+    match cli.algorithm {
+        Algorithm::Dqn => {
             let mut agent = DqnAgent::new(app_config.dqn.clone());
             if cli.resume {
                 resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
@@ -110,7 +110,7 @@ fn main() -> Result<()> {
                 run_dashboard(agent, trainer_config, total_episodes)
             }
         }
-        "pg" => {
+        Algorithm::Pg => {
             let mut agent = PolicyGradientAgent::new(app_config.pg.clone());
             if cli.resume {
                 resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
                 run_dashboard(agent, trainer_config, total_episodes)
             }
         }
-        "az" => {
+        Algorithm::Az => {
             let mut agent = AlphaZeroAgent::new(app_config.az.clone());
             if cli.resume {
                 resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
@@ -136,7 +136,6 @@ fn main() -> Result<()> {
                 run_dashboard(agent, trainer_config, total_episodes)
             }
         }
-        _ => unreachable!(),
     }
 }
 
