@@ -7,7 +7,7 @@
 //! ## Modules
 //!
 //! - [`game`] — Core game logic: board, player, state machine
-//! - [`ai`] — Agent trait, algorithms (DQN, PG), neural networks, state encoding
+//! - [`ai`] — Agent trait, algorithms (DQN, Policy Gradient, AlphaZero, Negamax), neural networks, state encoding
 //! - [`training`] — Self-play trainer, replay buffer, metrics collection
 //! - [`checkpoint`] — Model persistence and versioning
 //! - [`ui`] — Terminal UI: game view, training dashboard
