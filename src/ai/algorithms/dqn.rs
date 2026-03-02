@@ -139,7 +139,7 @@ impl DqnAgent {
         // Greedy: forward pass through q_network, pick best legal action
         let state_tensor = encode_state::<InferBackend>(state, &self.device)
             .unsqueeze::<4>(); // [1, 3, 6, 7]
-        let q_values = self.target_network.forward(state_tensor); // [1, 7]
+        let q_values = self.q_network.valid().forward(state_tensor); // [1, 7]
         let q_vec: Vec<f32> = q_values
             .into_data()
             .to_vec()
