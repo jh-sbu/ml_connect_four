@@ -103,11 +103,11 @@ fn main() -> Result<()> {
                 resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
             }
             if cli.headless {
-                let trainer = Trainer::new(trainer_config);
+                let trainer = Trainer::new(trainer_config, app_config.checkpoint.clone());
                 trainer.train(&mut agent);
                 Ok(())
             } else {
-                run_dashboard(agent, trainer_config, total_episodes)
+                run_dashboard(agent, trainer_config, app_config.checkpoint.clone(), total_episodes)
             }
         }
         Algorithm::Pg => {
@@ -116,11 +116,11 @@ fn main() -> Result<()> {
                 resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
             }
             if cli.headless {
-                let trainer = Trainer::new(trainer_config);
+                let trainer = Trainer::new(trainer_config, app_config.checkpoint.clone());
                 trainer.train(&mut agent);
                 Ok(())
             } else {
-                run_dashboard(agent, trainer_config, total_episodes)
+                run_dashboard(agent, trainer_config, app_config.checkpoint.clone(), total_episodes)
             }
         }
         Algorithm::Az => {
@@ -129,11 +129,11 @@ fn main() -> Result<()> {
                 resume_agent(&mut agent, &trainer_config, &app_config, cli.headless)?;
             }
             if cli.headless {
-                let trainer = Trainer::new(trainer_config);
+                let trainer = Trainer::new(trainer_config, app_config.checkpoint.clone());
                 trainer.train(&mut agent);
                 Ok(())
             } else {
-                run_dashboard(agent, trainer_config, total_episodes)
+                run_dashboard(agent, trainer_config, app_config.checkpoint.clone(), total_episodes)
             }
         }
     }
@@ -174,6 +174,7 @@ fn resume_agent(
 fn run_dashboard<A: TrainableAgent + Send + 'static>(
     agent: A,
     trainer_config: TrainerConfig,
+    checkpoint_config: CheckpointManagerConfig,
     total_episodes: usize,
 ) -> Result<()> {
     let algorithm = agent.algorithm_name().to_string();
@@ -189,7 +190,7 @@ fn run_dashboard<A: TrainableAgent + Send + 'static>(
 
     let training_handle = std::thread::spawn(move || {
         let mut agent = agent;
-        let trainer = Trainer::new(trainer_config);
+        let trainer = Trainer::new(trainer_config, checkpoint_config);
         trainer.train_with_dashboard(&mut agent, update_tx, cmd_rx, pause_clone, quit_clone);
     });
 

@@ -47,10 +47,10 @@ pub struct Trainer {
 }
 
 impl Trainer {
-    pub fn new(config: TrainerConfig) -> Self {
+    pub fn new(config: TrainerConfig, checkpoint_config: CheckpointManagerConfig) -> Self {
         let checkpoint_manager = CheckpointManager::new(CheckpointManagerConfig {
             checkpoint_dir: config.checkpoint_dir.clone(),
-            ..Default::default()
+            ..checkpoint_config
         });
         Trainer {
             config,
@@ -361,7 +361,7 @@ mod tests {
             checkpoint_dir: PathBuf::from("/tmp/test_dashboard_ckpt"),
             ..Default::default()
         };
-        let trainer = Trainer::new(config);
+        let trainer = Trainer::new(config, Default::default());
         let mut agent = DqnAgent::new(DqnConfig {
             min_replay_size: 5,
             batch_size: 2,
@@ -399,7 +399,7 @@ mod tests {
             checkpoint_dir: PathBuf::from("/tmp/test_quit_ckpt"),
             ..Default::default()
         };
-        let trainer = Trainer::new(config);
+        let trainer = Trainer::new(config, Default::default());
         let mut agent = DqnAgent::new(DqnConfig {
             min_replay_size: 999_999, // prevent actual training
             ..Default::default()
@@ -447,7 +447,7 @@ mod tests {
             checkpoint_dir: PathBuf::from("/tmp/test_pg_train_ckpt"),
             ..Default::default()
         };
-        let trainer = Trainer::new(config);
+        let trainer = Trainer::new(config, Default::default());
         let mut agent = PolicyGradientAgent::new(PgConfig {
             ppo_epochs: 1,
             ..Default::default()
@@ -468,7 +468,7 @@ mod tests {
             checkpoint_dir: PathBuf::from("/tmp/test_pg_dashboard_ckpt"),
             ..Default::default()
         };
-        let trainer = Trainer::new(config);
+        let trainer = Trainer::new(config, Default::default());
         let mut agent = PolicyGradientAgent::new(PgConfig {
             ppo_epochs: 1,
             ..Default::default()
